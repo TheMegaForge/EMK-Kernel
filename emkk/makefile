@@ -1,24 +1,34 @@
 
+CARGO_OUTPUT := target/emkk/debug/emkk
+DESIRED_OUTPUT := target/emkk/debug/KERNEL_0.ELF
+
+# CHANGE This, If you´re trying to run the operating system yourself
+BOOTLOADER_ROOT := /mnt/e/EMKK/uefi-dev/UEFI-GPT-image-creator/
+
+BOOTLOADER_ROOT_DISK := /mnt/emkk_esp/
+
+NASM_FLAGS := -g -F dwarf -f elf64
+
 compile_asm:
-	nasm src/asm/memory_impl.asm -g -F dwarf -f elf64 -o out/memory_impl.o
-	nasm src/asm/x86_64.asm -g -F dwarf -f elf64 -o out/x86_64.o
-	nasm src/asm/bootstrap.asm -g -F dwarf -f elf64 -o out/bootstrap.o
-	nasm src/asm/interrupts_impl.asm -g -F dwarf -f elf64 -o out/interrupts_impl.o
-	nasm src/asm/time.asm -g -F dwarf -f elf64 -o out/time.o
-	nasm src/asm/context_switch.asm -g -F dwarf -f elf64 -o out/context_switch.o
+	nasm $(NASM_FLAGS) src/asm/memory_impl.asm  -o out/memory_impl.o
+	nasm $(NASM_FLAGS) src/asm/x86_64.asm -o out/x86_64.o
+	nasm $(NASM_FLAGS) src/asm/bootstrap.asm  -o out/bootstrap.o
+	nasm $(NASM_FLAGS) src/asm/interrupts_impl.asm  -o out/interrupts_impl.o
+	nasm $(NASM_FLAGS) src/asm/time.asm  -o out/time.o
+	nasm $(NASM_FLAGS) src/asm/context_switch.asm -o out/context_switch.o
 copy:
-	@if test -f target/emkk/debug/emkk && test -f target/emkk/debug/KERNEL_0.ELF; then\
-		rm target/emkk/debug/KERNEL_0.ELF; \
+	@if test -f $(CARGO_OUTPUT) && test -f $(DESIRED_OUTPUT); then\
+		rm $(DESIRED_OUTPUT); \
 		echo "Removing KERNEL_0.ELF"; \
 	fi
-	@if test -f target/emkk/debug/emkk; then\
-	    mv -f target/emkk/debug/emkk target/emkk/debug/KERNEL_0.ELF; \
+	@if test -f $(CARGO_OUTPUT); then\
+	    mv -f $(CARGO_OUTPUT) $(DESIRED_OUTPUT); \
 		echo "emkk -> KERNEL_0.ELF"; \
 	fi
-	cp target/emkk/debug/KERNEL_0.ELF /mnt/e/EMKK/uefi-dev/UEFI-GPT-image-creator/
-	@if ! findmnt --mountpoint /mnt/emkk_esp > /dev/null; then \
-	    sudo mount /dev/loop0p1 /mnt/emkk_esp; \
+	cp $(DESIRED_OUTPUT) $(BOOTLOADER_ROOT)
+	@if ! findmnt --mountpoint $(BOOTLOADER_ROOT_DISK)  > /dev/null; then \
+	    sudo mount /dev/loop0p1 $(BOOTLOADER_ROOT_DISK); \
         echo "Mounted /dev/loop0p1 -> /mnt/emkk_esp"; \
     fi
-	sudo cp target/emkk/debug/KERNEL_0.ELF /mnt/emkk_esp/
-	sudo umount /mnt/emkk_esp
+	sudo cp $(DESIRED_OUTPUT) $(BOOTLOADER_ROOT_DISK)
+	sudo umount $(BOOTLOADER_ROOT_DISK)
