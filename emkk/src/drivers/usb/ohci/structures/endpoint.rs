@@ -35,6 +35,9 @@ pub enum EndpointDescriptorBitPart {
     /** Connector (Custom)*/
     Con = (27 << 16) | 0,
 
+    /** Dummy (Custom). Used in the Control List and indicating that this is for a possible device*/
+    Dum = (28 << 16) | 0,
+
     /** Halted*/
     H = (0 << 16) | 2,
     /** toggleCarry */
@@ -46,6 +49,23 @@ impl OhciEndpointDescriptor {
         return Self {
             val: addr as *mut u32,
         };
+    }
+
+    pub fn copy_from(&mut self, ep: &OhciEndpointDescriptor) {
+        unsafe {
+            self.val
+                .add(0)
+                .write_volatile(ep.val.add(0).read_volatile());
+            self.val
+                .add(1)
+                .write_volatile(ep.val.add(1).read_volatile());
+            self.val
+                .add(2)
+                .write_volatile(ep.val.add(2).read_volatile());
+            self.val
+                .add(3)
+                .write_volatile(ep.val.add(3).read_volatile());
+        }
     }
 
     pub fn address(&self) -> u32 {

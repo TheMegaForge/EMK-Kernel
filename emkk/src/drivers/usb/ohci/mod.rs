@@ -8,7 +8,7 @@ use crate::{
     arch::{isr::ISRRegisters, lapic::LocalApic},
     drivers::usb::{
         independent::UsbControllerType,
-        ohci::{data_structures::{OhciBar, OhciCommandStatusBitPart, OhciHcca, OhciInterrupt}, structures::{device::OhciDevice, interrupt_list::OhciHccaInterruptList, non_periodic_list::OhciNonPeriodicList}},
+        ohci::{data_structures::{HostControllerFunctionalState, OhciBar, OhciCommandStatusBitPart, OhciHcca, OhciInterrupt, OhciRhDescriptorABitPart::Nps, OhciRhDescriptorBPart::Ppcm, OhciRhPortStatusBitPart::{self, Pes, Prs}, OhciRhStatusBitPart::Lpsc}, structures::{device::OhciDevice, endpoint::{EndpointDescriptorBitPart::K, EndpointDescriptorPart::Mps, OhciEndpointDescriptor}, interrupt_list::OhciHccaInterruptList, non_periodic_list::OhciNonPeriodicList}},
         traits::UsbController,
     },
     fixed_vaddrs::{OHCI_BAR_FIXED_VADDR, ref_processor_mut},
@@ -56,8 +56,8 @@ impl OhciController {
             num_potential_devices: 0,
             num_active_devices: 0,
             error_present: false,
-            bulk_list:  OhciNonPeriodicList::new(null_mut(), null_mut()),
-            control_list: OhciNonPeriodicList::new(null_mut(), null_mut()),
+            bulk_list:  OhciNonPeriodicList::new(null_mut(), null_mut(), null_mut(), 0),
+            control_list: OhciNonPeriodicList::new(null_mut(), null_mut(), null_mut(), 0),
             devices: invalid_mut_slice(),
             device_memory: MemoryBlock::empty(),
         };
@@ -164,10 +164,53 @@ impl UsbController for OhciController {
          * NOTICE: Doesn´t deactivate the Controller.
          */
         self.bar.hc_interrupt_disable().disable(OhciInterrupt::Mie);
-        let mut hc_control = self.bar.hc_control().disable_all_processing();
+        self.bar.hc_control().disable_all_processing();
     }
     fn untraited_work0(&mut self) -> Option<bool> {
-        todo!()
+        /* This is setting the addresses of the devices and prepares the port*/
+
+        let mut tmp_buffer: [u32; 4] = [0; 4];
+
+        if !self.bar.hc_rh_descriptor_a().is_set(Nps) {
+            /* enables global power*/
+            self.bar.hc_rh_status().set(Lpsc);
+            sleep(10);
+        }
+
+        for i in 0..self.num_potential_devices {
+            let mut status = self.bar.hc_rh_port_status(i as u32 + 1);
+            if status.is_set(data_structures::OhciRhPortStatusBitPart::Ccs) {
+                if !status.is_set(data_structures::OhciRhPortStatusBitPart::Pps){
+                    /* Power down. Activate it
+                     * Notice: If this port is controlled by global power. It´s allready enabled
+                     */
+                    status.set(OhciRhPortStatusBitPart::Pps);
+                }
+                status.set(Prs); /* Resets Port*/
+                while status.is_set(Prs) {} /* Waiting for reset to be complete */
+                self.devices[i as usize] = OhciDevice::new_resetted(i + 1, i);
+
+                let mut endpoint = OhciEndpointDescriptor::new(tmp_buffer.as_mut_ptr() as *mut c_void);
+                endpoint.zero_out();
+
+                if status.is_set(OhciRhPortStatusBitPart::Lsda) {
+                    /* Endpoint is for a low speed device*/
+                    endpoint.set(structures::endpoint::EndpointDescriptorBitPart::S, true);
+                }
+                endpoint.set_part(Mps, 8); /* Minimum bytes supported are 8 bytes*/
+                self.control_list.append_endpoint(endpoint);
+            }else {
+                self.devices[i as usize] = OhciDevice::new_detached(i + 1, i);
+                let mut endpoint = OhciEndpointDescriptor::new(tmp_buffer.as_mut_ptr() as *mut c_void);
+                endpoint.zero_out();
+                endpoint.set_part(Mps, 8);
+                endpoint.set(K, true);
+                endpoint.set(structures::endpoint::EndpointDescriptorBitPart::Dum, true);
+                self.control_list.append_endpoint(endpoint);
+            }
+        }
+
+        todo!("Implement Control List filling and recieving/sending of data ")
     }
     fn untraited_work1(&mut self) -> Option<bool> {
         todo!()
@@ -203,6 +246,7 @@ impl OhciController {
         self.bar.hc_interrupt_enable().enable(OhciInterrupt::Ue);
         self.bar.hc_interrupt_enable().enable(OhciInterrupt::Rd);
         self.bar.hc_interrupt_enable().enable(OhciInterrupt::Wdh);
+
         // Total Timespan from SOF to SOF is 1ms
         self.bar.write_hc_periodic_start(0x2A2F); // Interrupt/Isochronous List is preferred after ~900 microseconds
         self.bar.write_hc_ls_threshold(0x500); // 1280 bit times. 1 bit time = 83,33ns (or 1 cycle from 12 Mhz clock)
@@ -216,8 +260,11 @@ impl OhciController {
         self.interrupt_list = OhciHccaInterruptList::new(new_hcca_addr as *mut u32);
         self.interrupt_list.initialize(&mut self.private_physical_allocator);
 
-        self.bulk_list = unsafe { OhciNonPeriodicList::new(self.bar.address().add(11), self.bar.address().add(10)) };
-        self.control_list = unsafe { OhciNonPeriodicList::new(self.bar.address().add(9), self.bar.address().add(8)) };
+        self.bulk_list = unsafe { OhciNonPeriodicList::new(self.bar.address().add(11), self.bar.address().add(10), self.bar.address().add(2), 2) };
+        self.control_list = unsafe { OhciNonPeriodicList::new(self.bar.address().add(9), self.bar.address().add(8), self.bar.address().add(2), 1 ) };
+
+        self.bulk_list.initialize(&mut self.private_physical_allocator);
+        self.control_list.initialize(&mut self.private_physical_allocator);
 
         self.num_potential_devices =
             self.bar
@@ -230,6 +277,11 @@ impl OhciController {
             Err(_e) => simple_kernel_panic(module.name(), "Could not allocate Memory for Device Array\n")
         };
         self.devices = unsafe { slice::from_raw_parts_mut(self.device_memory.as_mut_ptr(), self.num_potential_devices as usize) };
+        self.bar.hc_interrupt_enable().enable(OhciInterrupt::Rd);
+        self.bar.hc_control().set(data_structures::OhciControlBitPart::Cle, true);
+        self.bar.hc_control().set_part(data_structures::OhciControlPart::Hcfs, HostControllerFunctionalState::UsbResume as u32);
+        self.bar.hc_control().set_part(data_structures::OhciControlPart::Hcfs, HostControllerFunctionalState::UsbOperational as u32);
+
     }
     /**
      * Causes

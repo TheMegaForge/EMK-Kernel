@@ -10,6 +10,30 @@ pub struct OhciDevice {
     class_code: u8,
     sub_class_code: u8,
     state: UsbDeviceState,
+    control_list_ep_index: u8,
+}
+
+impl OhciDevice {
+    pub fn new_resetted(port: u8, control_list_ep_index: u8) -> Self {
+        return Self {
+            device_address: 0,
+            port,
+            class_code: 0,
+            sub_class_code: 0,
+            state: UsbDeviceState::Resetted,
+            control_list_ep_index,
+        };
+    }
+    pub fn new_detached(port: u8, control_list_ep_index: u8) -> Self {
+        return Self {
+            device_address: 0,
+            port,
+            class_code: 0,
+            sub_class_code: 0,
+            state: UsbDeviceState::Detached,
+            control_list_ep_index,
+        };
+    }
 }
 
 impl UsbDevice for OhciDevice {

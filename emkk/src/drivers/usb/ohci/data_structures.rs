@@ -82,12 +82,11 @@ impl OhciControl {
         let mut prev_val = unsafe { self.val.read_volatile() };
         prev_val |= 0xF << 2; // Ple, Ie, Cle, Ble
         unsafe { self.val.write_volatile(prev_val) };
-        todo!()
     }
 
     pub fn is_set(&self, what_to_check: OhciControlBitPart) -> bool {
         let val = unsafe { self.val.read_volatile() };
-        return 1 == (val & (1 << what_to_check as u32));
+        return 0 != (val & (1 << what_to_check as u32));
     }
 
     pub fn set(&mut self, what_to_set: OhciControlBitPart, val: bool) {
@@ -143,7 +142,7 @@ impl OhciCommandStatus {
 
     pub fn is_set(&self, what_to_check: OhciCommandStatusBitPart) -> bool {
         let val = unsafe { self.val.read_volatile() };
-        return 1 == (val & (1 << what_to_check as u32));
+        return 0 != (val & (1 << what_to_check as u32));
     }
 
     pub fn set(&mut self, what_to_set: OhciCommandStatusBitPart) {
@@ -200,7 +199,7 @@ impl OhciInterruptStatus {
 
     pub fn is_set(&self, what_to_check: OhciInterrupt) -> bool {
         let val = unsafe { self.val.read_volatile() };
-        return 1 == (val & (1 << what_to_check as u32));
+        return 0 != (val & (1 << what_to_check as u32));
     }
 
     pub fn set(&mut self, what_to_set: OhciInterrupt) {
@@ -280,7 +279,7 @@ impl OhciFmInterval {
 
     pub fn is_set(&self, what_to_check: OhciFmIntervalBitPart) -> bool {
         let val = unsafe { self.val.read_volatile() };
-        return 1 == (val & (1 << what_to_check as u32));
+        return 0 != (val & (1 << what_to_check as u32));
     }
 
     pub fn set(&mut self, what_to_set: OhciFmIntervalBitPart) {
@@ -328,7 +327,7 @@ impl OhciFmRemaining {
 
     pub fn is_set(&self, what_to_check: OhciFmRemainingBitPart) -> bool {
         let val = unsafe { self.val.read_volatile() };
-        return 1 == (val & (1 << what_to_check as u32));
+        return 0 != (val & (1 << what_to_check as u32));
     }
 
     pub fn set(&mut self, what_to_set: OhciFmRemainingBitPart) {
@@ -386,7 +385,7 @@ impl OhciRhDescriptorA {
 
     pub fn is_set(&self, what_to_check: OhciRhDescriptorABitPart) -> bool {
         let val = unsafe { self.val.read_volatile() };
-        return 1 == (val & (1 << what_to_check as u32));
+        return 0 != (val & (1 << what_to_check as u32));
     }
 
     pub fn set(&mut self, what_to_set: OhciRhDescriptorABitPart) {
@@ -468,7 +467,7 @@ impl OhciRhStatus {
 
     pub fn is_set(&self, what_to_check: OhciRhStatusBitPart) -> bool {
         let val = unsafe { self.val.read_volatile() };
-        return 1 == (val & (1 << what_to_check as u32));
+        return 0 != (val & (1 << what_to_check as u32));
     }
 
     pub fn set(&mut self, what_to_set: OhciRhStatusBitPart) {
@@ -517,7 +516,7 @@ impl OhciRhPortStatus {
 
     pub fn is_set(&self, what_to_check: OhciRhPortStatusBitPart) -> bool {
         let val = unsafe { self.val.read_volatile() };
-        return 1 == (val & (1 << what_to_check as u32));
+        return 0 != (val & (1 << what_to_check as u32));
     }
 
     pub fn set(&mut self, what_to_set: OhciRhPortStatusBitPart) {
