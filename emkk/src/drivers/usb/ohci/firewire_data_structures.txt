@@ -1,0 +1,1036 @@
+use core::ffi::c_void;
+
+use crate::utils::traits::AsU64;
+
+pub struct OhciVersion {
+    val: u32,
+}
+
+impl OhciVersion {
+    pub fn new(ptr: *const u32) -> Self {
+        return Self {
+            val: unsafe { *ptr },
+        };
+    }
+
+    pub fn revision(&self) -> u8 {
+        return (self.val & 0xFF) as u8;
+    }
+
+    pub fn version(&self) -> u16 {
+        return ((self.val >> 16) & 0x1FF) as u16;
+    }
+}
+
+pub struct OhciGuidRom {
+    val: u32,
+}
+
+impl OhciGuidRom {
+    pub fn new(ptr: *const u32) -> Self {
+        return OhciGuidRom {
+            val: unsafe { *ptr },
+        };
+    }
+
+    pub fn mini_rom(&self) -> u8 {
+        return (self.val & 0xFF) as u8;
+    }
+    pub fn rd_data(&self) -> u8 {
+        return ((self.val >> 16) & 0xFF) as u8;
+    }
+    pub fn rd_start(&self) -> bool {
+        return 1 == (self.val >> 25) & 1;
+    }
+    pub fn addr_reset(&self) -> bool {
+        return 1 == (self.val >> 31) & 1;
+    }
+}
+
+pub struct OhciAtRetries {
+    val: *mut u32,
+}
+/* Info: do not write read only bits */
+impl OhciAtRetries {
+    pub const MAX_AT_REQ_RETRIES_MASK: u32 = 0xF;
+    pub const MAX_AT_RESP_RETRIES_MASK: u32 = 0xF;
+    pub const MAX_PHYS_RESP_RETRIES_MASK: u32 = 0xF;
+    pub const MAX_CYCLE_LIMIT_MASK: u32 = 0x1FFF;
+    pub const MAX_SECOND_LIMIT_MASK: u32 = 0x7;
+
+    pub const MAX_AT_REQ_RETRIES_SHIFT: u32 = 0;
+    pub const MAX_AT_RESP_RETRIES_SHIFT: u32 = 4;
+    pub const MAX_PHYS_RESP_RETRIES_SHIFT: u32 = 8;
+    pub const MAX_CYCLE_LIMIT_SHIFT: u32 = 16;
+    pub const MAX_SECOND_LIMIT_SHIFT: u32 = 29;
+
+    pub fn new(ptr: *mut u32) -> Self {
+        return Self {
+            val: unsafe { ptr },
+        };
+    }
+    pub fn max_at_req_retries(&self) -> u8 {
+        return (unsafe { self.val.read_volatile() } & 0xF) as u8;
+    }
+    pub fn max_at_resp_retries(&self) -> u8 {
+        return ((unsafe { self.val.read_volatile() } >> 4) & 0xF) as u8;
+    }
+    pub fn max_phys_resp_retries(&self) -> u8 {
+        return ((unsafe { self.val.read_volatile() } >> 8) & 0xF) as u8;
+    }
+    pub fn cycle_limit(&self) -> u16 {
+        return ((unsafe { self.val.read_volatile() } >> 16) & 0x1FFF) as u16;
+    }
+    pub fn second_limit(&self) -> u8 {
+        return ((unsafe { self.val.read_volatile() } >> 28) & 0x7) as u8;
+    }
+
+    pub fn set_max_at_req_retries(&mut self, val: u8) {
+        unsafe {
+            self.val.write_volatile(
+                self.val.read_volatile()
+                    & !(Self::MAX_AT_REQ_RETRIES_MASK << Self::MAX_AT_REQ_RETRIES_SHIFT)
+                    | (val as u32 & Self::MAX_AT_REQ_RETRIES_MASK)
+                        << Self::MAX_AT_REQ_RETRIES_SHIFT,
+            )
+        };
+    }
+
+    pub fn set_max_at_resp_retries(&mut self, val: u8) {
+        unsafe {
+            self.val.write_volatile(
+                self.val.read_volatile()
+                    & !(Self::MAX_AT_RESP_RETRIES_MASK << Self::MAX_AT_RESP_RETRIES_SHIFT)
+                    | (val as u32 & Self::MAX_AT_RESP_RETRIES_MASK)
+                        << Self::MAX_AT_RESP_RETRIES_SHIFT,
+            )
+        };
+    }
+
+    pub fn set_max_phys_resp_retries(&mut self, val: u8) {
+        unsafe {
+            self.val.write_volatile(
+                self.val.read_volatile()
+                    & !(Self::MAX_PHYS_RESP_RETRIES_MASK << Self::MAX_PHYS_RESP_RETRIES_SHIFT)
+                    | (val as u32 & Self::MAX_PHYS_RESP_RETRIES_MASK)
+                        << Self::MAX_PHYS_RESP_RETRIES_SHIFT,
+            )
+        };
+    }
+
+    pub fn set_cycle_limit(&mut self, val: u16) {
+        unsafe {
+            self.val.write_volatile(
+                self.val.read_volatile()
+                    & !(Self::MAX_CYCLE_LIMIT_MASK << Self::MAX_CYCLE_LIMIT_SHIFT)
+                    | (val as u32 & Self::MAX_CYCLE_LIMIT_MASK) << Self::MAX_CYCLE_LIMIT_SHIFT,
+            )
+        };
+    }
+
+    pub fn set_second_limit(&mut self, val: u8) {
+        unsafe {
+            self.val.write_volatile(
+                self.val.read_volatile()
+                    & !(Self::MAX_SECOND_LIMIT_MASK << Self::MAX_SECOND_LIMIT_SHIFT)
+                    | (val as u32 & Self::MAX_SECOND_LIMIT_MASK) << Self::MAX_SECOND_LIMIT_SHIFT,
+            )
+        };
+    }
+}
+#[repr(u32)]
+pub enum OhciCsrSel {
+    BusManagerId = 0,
+    BandwidthAvailable = 1,
+    ChannelsAvailableHi = 2,
+    ChannelsAvailableLo = 3,
+}
+pub struct OhciCsrControl {
+    val: *mut u32,
+}
+
+impl OhciCsrControl {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn csr_sel(&self) -> u8 {
+        return unsafe { self.val.read_volatile() as u8 } & 0x3;
+    }
+
+    pub fn set_csr_sel(&mut self, val: OhciCsrSel) {
+        unsafe {
+            self.val
+                .write_volatile((self.val.read_volatile() & !(0x3 | 1 << 31)) | val as u32)
+        };
+    }
+
+    pub fn csr_done(&self) -> bool {
+        return ((unsafe { self.val.read_volatile() } >> 31) & 1) == 1;
+    }
+}
+
+pub struct OhciConfigRomHdr {
+    val: *mut u32,
+}
+
+impl OhciConfigRomHdr {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn rom_crc_value(&self) -> u16 {
+        return unsafe { self.val.read_volatile() & 0xFFFF } as u16;
+    }
+    pub fn crc_length(&self) -> u8 {
+        return ((unsafe { self.val.read_volatile() } >> 16) & 0xFF) as u8;
+    }
+    pub fn info_length(&self) -> u8 {
+        return (unsafe { (self.val.read_volatile() >> 24) } & 0xFF) as u8;
+    }
+
+    pub fn write_rom_crc_value(&self, val: u16) {
+        unsafe {
+            self.val
+                .write_volatile((self.val.read_volatile() & !0xFFFF) | val as u32)
+        };
+    }
+
+    pub fn write_crc_length(&self, val: u8) {
+        unsafe {
+            self.val
+                .write_volatile((self.val.read_volatile() & !(0xFF << 16)) | ((val as u32) << 16));
+        };
+    }
+
+    pub fn write_info_length(&self, val: u8) {
+        unsafe {
+            self.val
+                .write_volatile((self.val.read_volatile() & !(0xFF << 24)) | ((val as u32) << 24));
+        };
+    }
+}
+
+pub struct OhciBusOptions {
+    val: *mut u32,
+}
+
+impl OhciBusOptions {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+    pub fn link_spd(&self) -> u8 {
+        return (unsafe { self.val.read_volatile() } & 7) as u8;
+    }
+    pub fn max_rec(&self) -> u8 {
+        return ((unsafe { self.val.read_volatile() } >> 12) & 0xF) as u8;
+    }
+
+    pub fn write_link_spd(&mut self, val: u8) {
+        unsafe {
+            self.val
+                .write_volatile((self.val.read_volatile() & !0x7) | (val as u32) & 0x7)
+        }
+    }
+
+    pub fn write_max_rec(&mut self, val: u8) {
+        unsafe {
+            self.val.write_volatile(
+                ((self.val.read_volatile() >> 12) & !0xF) | ((val as u32) & 0xF) << 12,
+            )
+        }
+    }
+}
+
+pub struct OhciPostedWriteAddress {
+    hi: u32,
+    lo: u32,
+}
+
+impl OhciPostedWriteAddress {
+    pub fn new(lo: u32, hi: u32) -> Self {
+        return Self { hi, lo };
+    }
+    pub fn offset(&self) -> u64 {
+        return self.lo as u64 | (self.hi as u64 & 0xFFFF) << 32;
+    }
+    pub fn source_id(&self) -> u16 {
+        return (self.hi >> 16) as u16;
+    }
+}
+
+pub struct OhciHcControlClear {
+    val: *mut u32,
+}
+
+impl OhciHcControlClear {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn clear_posted_write_enable(&mut self) {
+        unsafe { self.val.write_volatile(1 << 18) };
+    }
+    pub fn clear_a_phy_enhance_enable(&mut self) {
+        unsafe { self.val.write_volatile(1 << 22) };
+    }
+    pub fn clear_program_phy_enable(&mut self) {
+        unsafe { self.val.write_volatile(1 << 23) };
+    }
+    pub fn clear_ack_tardy_enable(&mut self) {
+        unsafe { self.val.write_volatile(1 << 29) };
+    }
+    pub fn clear_no_byte_swap_data(&mut self) {
+        unsafe { self.val.write_volatile(1 << 30) };
+    }
+}
+
+pub struct OhciHcControlSet {
+    val: *mut u32,
+}
+
+impl OhciHcControlSet {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn set_soft_reset(&mut self) {
+        unsafe { self.val.write_volatile(1 << 16) }
+    }
+    pub fn set_link_enable(&mut self) {
+        unsafe { self.val.write_volatile(1 << 17) }
+    }
+    pub fn set_posted_write_enable(&mut self) {
+        unsafe { self.val.write_volatile(1 << 18) }
+    }
+    pub fn set_lps(&mut self) {
+        unsafe { self.val.write_volatile(1 << 19) }
+    }
+    pub fn set_a_phy_enhance_enable(&mut self) {
+        unsafe { self.val.write_volatile(1 << 22) }
+    }
+    pub fn set_ack_tardy_enable(&mut self) {
+        unsafe { self.val.write_volatile(1 << 29) }
+    }
+    pub fn set_no_byte_swap_data(&mut self) {
+        unsafe { self.val.write_volatile(1 << 30) }
+    }
+    pub fn set_bib_image_valid(&mut self) {
+        unsafe { self.val.write_volatile(1 << 31) }
+    }
+}
+
+pub struct OhciSelfIdCount {
+    val: *mut u32,
+}
+
+impl OhciSelfIdCount {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+    /** size is in quadlets*/
+    pub fn self_id_size(&self) -> u16 {
+        return unsafe { ((self.val.read_volatile() >> 2) & 0x1FF) as u16 };
+    }
+    pub fn self_id_generation(&self) -> u8 {
+        return unsafe { ((self.val.read_volatile() >> 16) & 0xFF) as u8 };
+    }
+    pub fn self_id_error(&self) -> bool {
+        return unsafe { self.val.read_volatile() & (1 << 31) != 0 };
+    }
+}
+
+pub struct OhciIrMultiChanMaskSet {
+    val: *mut u32,
+}
+
+impl OhciIrMultiChanMaskSet {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn enable_channel(&mut self, channel: u32) {
+        unsafe { self.val.write_volatile(1 << (channel % 32)) };
+    }
+}
+
+pub struct OhciIrMultiChanMaskClear {
+    val: *mut u32,
+}
+
+impl OhciIrMultiChanMaskClear {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn disable_channel(&mut self, channel: u32) {
+        unsafe { self.val.write_volatile(1 << (channel % 32)) }
+    }
+}
+#[repr(u32)]
+pub enum OhciIntEvent {
+    ReqTxComplete = 0,
+    RespTxComplete = 1,
+    ARRq = 2,
+    ARRs = 3,
+    RQPkt = 4,
+    RSPkt = 5,
+    IsochTx = 6,
+    IsochRx = 7,
+    PostedWriteErr = 8,
+    LockRespErr = 9,
+    SelfIdComplete2 = 15,
+    SelfIdComplete = 6,
+    BusReset = 17,
+    RegAccessFail = 18,
+    Phy = 19,
+    CycleSynch = 20,
+    Cycle64Seconds = 21,
+    CycleLost = 22,
+    CycleInconsistent = 23,
+    UnrecoverableError = 24,
+    CycleTooLong = 25,
+    PhyRegRcvd = 26,
+    AckTardy = 27,
+    SoftInterrupt = 29,
+    MasterIntEnable = 31,
+}
+
+/**
+ * possible unused, since some functions are just there to trigger errors
+ */
+pub struct OhciIntEventSet {
+    val: *mut u32,
+}
+
+impl OhciIntEventSet {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+    pub fn set(&mut self, what_to_set: OhciIntEvent) {
+        unsafe { self.val.write_volatile(1 << (what_to_set as u32)) }
+    }
+
+    pub fn is_set(&self, check_for: OhciIntEvent) -> bool {
+        return unsafe { self.val.read_volatile() & 1 << (check_for as u32) } != 0;
+    }
+}
+
+pub struct OhciIntEventClear {
+    val: *mut u32,
+}
+
+impl OhciIntEventClear {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn disable(&mut self, what_to_disable: OhciIntEvent) {
+        unsafe { self.val.write_volatile(1 << (what_to_disable as u32)) }
+    }
+}
+
+pub struct OhciIntMaskSet {
+    val: *mut u32,
+}
+
+impl OhciIntMaskSet {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn is_enabled(&mut self, what_to_enable: OhciIntEvent) -> bool {
+        return unsafe { self.val.read_volatile() & (1 << (what_to_enable as u32)) } != 0;
+    }
+
+    pub fn enable(&mut self, what_to_enable: OhciIntEvent) {
+        unsafe { self.val.write_volatile(1 << (what_to_enable as u32)) }
+    }
+}
+
+pub struct OhciIntMaskClear {
+    val: *mut u32,
+}
+
+impl OhciIntMaskClear {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+}
+
+pub struct OhciIsoXMitIntEventSet {
+    val: *mut u32,
+}
+
+impl OhciIsoXMitIntEventSet {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn request_isochronous_transmit_interrupt(&mut self, iso_int: u8) {
+        unsafe { self.val.write_volatile(1 << iso_int) }
+    }
+}
+
+pub struct OhciIsoXMitIntEventClear {
+    val: *mut u32,
+}
+
+impl OhciIsoXMitIntEventClear {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+    pub fn unrequest_isochronous_transmit_interrupt(&mut self, iso_int: u8) {
+        unsafe { self.val.write_volatile(1 << iso_int) }
+    }
+}
+
+pub struct OhciIsoXMitIntMaskSet {
+    val: *mut u32,
+}
+
+impl OhciIsoXMitIntMaskSet {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+    pub fn enable_isochronous_transmit_context_interrupt(&mut self, iso_int: u8) {
+        unsafe { self.val.write_volatile(1 << iso_int) }
+    }
+}
+
+pub struct OhciIsoXMitIntMaskClear {
+    val: *mut u32,
+}
+
+impl OhciIsoXMitIntMaskClear {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn disable_isochronous_transmit_context_interrupt(&mut self, iso_int: u8) {
+        unsafe { self.val.write_volatile(1 << iso_int) }
+    }
+}
+
+pub struct OhciIsoRecvIntEventSet {
+    val: *mut u32,
+}
+
+impl OhciIsoRecvIntEventSet {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn request_isochronous_recieved_context_interrupt(&mut self, iso_int: u8) {
+        unsafe { self.val.write_volatile(1 << iso_int) }
+    }
+}
+
+pub struct OhciIsoRecvIntEventClear {
+    val: *mut u32,
+}
+
+impl OhciIsoRecvIntEventClear {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn request_isochronous_recieved_context_interrupt(&mut self, iso_int: u8) {
+        unsafe { self.val.write_volatile(1 << iso_int) }
+    }
+}
+
+pub struct OhciIsoRecvIntMaskSet {
+    val: *mut u32,
+}
+
+impl OhciIsoRecvIntMaskSet {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn enable_isochronous_recieved_context_interrupt(&mut self, iso_int: u8) {
+        unsafe { self.val.write_volatile(1 << iso_int) }
+    }
+}
+
+pub struct OhciIsoRecvIntMaskClear {
+    val: *mut u32,
+}
+
+impl OhciIsoRecvIntMaskClear {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn disable_isochronous_recieved_context_interrupt(&mut self, iso_int: u8) {
+        unsafe { self.val.write_volatile(1 << iso_int) }
+    }
+}
+
+pub struct OhciFairnessControl {
+    val: *mut u32,
+}
+
+impl OhciFairnessControl {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn pri_req(&self) -> u8 {
+        return unsafe { self.val.read_volatile() } as u8;
+    }
+
+    pub fn set_pri_req(&mut self, val: u8) {
+        unsafe { self.val.write_volatile(val as u32) }
+    }
+}
+#[repr(u32)]
+pub enum OhciLinkControl {
+    Tag1SyncFilterLock = 6,
+    RcvSelfId = 9,
+    RcvPhyPkt = 10,
+    CycleTimerEnable = 20,
+    CycleMaster = 21,
+    CycleSource = 22,
+}
+
+pub struct OhciLinkControlSet {
+    val: *mut u32,
+}
+
+impl OhciLinkControlSet {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn set(&mut self, what_to_set: OhciLinkControl) {
+        unsafe { self.val.write_volatile(1 << (what_to_set as u32)) }
+    }
+
+    pub fn is_set(&self, what_to_check: OhciLinkControl) -> bool {
+        return unsafe { self.val.read_volatile() & (1 << (what_to_check as u32)) } != 0;
+    }
+}
+
+pub struct OhciLinkControlClear {
+    val: *mut u32,
+}
+
+impl OhciLinkControlClear {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn clear(&mut self, what_to_clear: OhciLinkControl) {
+        unsafe { self.val.write_volatile(1 << (what_to_clear as u32)) }
+    }
+}
+
+pub struct OhciNodeId {
+    val: *mut u32,
+}
+
+impl OhciNodeId {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn node_number(&self) -> u8 {
+        return unsafe { self.val.read_volatile() & 0x3F } as u8;
+    }
+    pub fn bus_number(&self) -> u16 {
+        return unsafe { (self.val.read_volatile() >> 6) & 0x3FF } as u16;
+    }
+    pub fn cps(&self) -> bool {
+        return 1 == unsafe { (self.val.read_volatile() >> 27) } & 1;
+    }
+    pub fn root(&self) -> bool {
+        return 1 == unsafe { (self.val.read_volatile() >> 30) } & 1;
+    }
+    pub fn id_valid(&self) -> bool {
+        return 1 == unsafe { (self.val.read_volatile() >> 31) } & 1;
+    }
+}
+
+pub struct OhciPhyControl {
+    val: *mut u32,
+}
+
+impl OhciPhyControl {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn wr_data(&self) -> u8 {
+        return unsafe { (self.val.read_volatile() & 0xFF) } as u8;
+    }
+
+    pub fn set_wr_data(&mut self, val: u8) {
+        unsafe {
+            self.val
+                .write_volatile((self.val.read_volatile() & !0xFF) | val as u32)
+        };
+    }
+    pub fn reg_addr(&self) -> u8 {
+        return unsafe { ((self.val.read_volatile() >> 8) & 0xF) } as u8;
+    }
+
+    pub fn set_reg_addr(&mut self, val: u8) {
+        unsafe {
+            self.val
+                .write_volatile((self.val.read_volatile() & !(0xF << 8)) | (val as u32) << 8)
+        };
+    }
+
+    pub fn wr_reg(&self) -> bool {
+        return 1 == unsafe { (self.val.read_volatile() >> 14) } & 1;
+    }
+
+    pub fn set_wr_reg(&mut self, wr_reg: bool) {
+        unsafe {
+            self.val
+                .write_volatile((self.val.read_volatile() & !(1 << 14)) | (wr_reg as u32) << 14)
+        };
+    }
+
+    pub fn rd_reg(&self) -> bool {
+        return 1 == unsafe { (self.val.read_volatile() >> 15) } & 1;
+    }
+
+    pub fn set_rd_reg(&mut self, rd_reg: bool) {
+        unsafe {
+            self.val
+                .write_volatile((self.val.read_volatile() & !(1 << 15)) | (rd_reg as u32) << 15)
+        };
+    }
+
+    pub fn rd_data(&self) -> u8 {
+        return (unsafe { (self.val.read_volatile() >> 16) } & 0xFF) as u8;
+    }
+    pub fn rd_addr(&self) -> u8 {
+        return (unsafe { (self.val.read_volatile() >> 24) } & 0xF) as u8;
+    }
+    pub fn rd_done(&self) -> bool {
+        return 1 == unsafe { (self.val.read_volatile() >> 31) } & 1;
+    }
+}
+
+pub struct OhciIsochronousCycleTimer {
+    val: *mut u32,
+}
+
+impl OhciIsochronousCycleTimer {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    pub fn cycle_seconds(&self) -> u8 {
+        return unsafe { ((self.val.read_volatile() >> 25) & 0x7F) } as u8;
+    }
+    pub fn cycle_count(&self) -> u16 {
+        return unsafe { ((self.val.read_volatile() >> 12) & 0x1FFF) } as u16;
+    }
+    pub fn cycle_offset(&self) -> u16 {
+        return unsafe { (self.val.read_volatile() & 0xFFF) } as u16;
+    }
+}
+
+pub struct OhciAsynchronousRequestFilter32Set {
+    val: *mut u32,
+}
+
+impl OhciAsynchronousRequestFilter32Set {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+    /**
+     * If this is from Hi, then async_request=31 corrosponds to asyncReqResourceAll
+     */
+    pub fn enable_receiving_of_asynchronous_requests(&mut self, async_request: u8) {
+        unsafe { self.val.write_volatile(1 << async_request) };
+    }
+}
+
+pub struct OhciAsynchronousRequestFilter32Clear {
+    val: *mut u32,
+}
+
+impl OhciAsynchronousRequestFilter32Clear {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    /**
+     * If this is from Hi, then async_request=31 corrosponds to asyncReqResourceAll
+     */
+    pub fn disable_receiving_of_asynchronous_requests(&mut self, async_request: u8) {
+        unsafe { self.val.write_volatile(1 << async_request) };
+    }
+}
+
+pub struct OhciPhysicalRequestFilter32Clear {
+    val: *mut u32,
+}
+
+impl OhciPhysicalRequestFilter32Clear {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    /**
+     * If this is from Hi, then phys_request=31 corrosponds to physReqResourceAllBuses
+     */
+    pub fn forward_to_async_recieve_request_dma_context(&mut self, phys_request: u8) {
+        unsafe { self.val.write_volatile(1 << phys_request) };
+    }
+}
+
+pub struct OhciPhysicalRequestFilter32Set {
+    val: *mut u32,
+}
+
+impl OhciPhysicalRequestFilter32Set {
+    pub fn new(val: *mut u32) -> Self {
+        return Self { val };
+    }
+
+    /**
+     * If this is from Hi, then phys_request=31 corrosponds to physReqResourceAllBuses
+     */
+    pub fn enable_sent_to_physical_response_unit(&mut self, phys_request: u8) {
+        unsafe { self.val.write_volatile(1 << phys_request) };
+    }
+}
+
+pub struct OhciBar {
+    control_registers: *mut u32,
+    async_dma_context_registers: *mut u32,
+    isochronous_transmit_dma_context_registers: *mut u32,
+    isochronous_receive_dma_context_registers: *mut u32,
+}
+
+impl OhciBar {
+    pub fn new(ptr: *mut c_void) -> Self {
+        return Self {
+            control_registers: ptr as *mut u32,
+            async_dma_context_registers: unsafe { ptr.add(0x180) } as *mut u32,
+            isochronous_transmit_dma_context_registers: unsafe { ptr.add(0x200) } as *mut u32,
+            isochronous_receive_dma_context_registers: unsafe { ptr.add(0x400) } as *mut u32,
+        };
+    }
+
+    pub fn version(&self) -> OhciVersion {
+        return OhciVersion::new(self.control_registers);
+    }
+
+    pub fn guid_rom(&self) -> OchiGuidRom {
+        return OhciGuidRom::new(unsafe { self.control_registers.add(1) });
+    }
+    pub fn at_retries(&self) -> OhciAtRetries {
+        return OhciAtRetries::new(unsafe { self.control_registers.add(2) });
+    }
+    pub fn csr_read_data(&self) -> u32 {
+        return unsafe { self.control_registers.add(3).read_volatile() };
+    }
+
+    pub fn csr_write_data(&mut self, val: u32) {
+        unsafe { self.control_registers.add(3).write_volatile(val) };
+    }
+
+    pub fn csr_compare_data(&self) -> u32 {
+        return unsafe { self.control_registers.add(4).read_volatile() };
+    }
+
+    pub fn csr_write_compare_data(&mut self, val: u32) {
+        unsafe { self.control_registers.add(4).write_volatile(val) };
+    }
+
+    pub fn csr_control(&self) -> OhciCsrControl {
+        return OhciCsrControl::new(unsafe { self.control_registers.add(5) });
+    }
+    pub fn config_rom_hdr(&self) -> OhciConfigRomHdr {
+        return OhciConfigRomHdr::new(unsafe { self.control_registers.add(6) });
+    }
+    pub fn bus_id(&self) -> u32 {
+        return unsafe { self.control_registers.add(7).read_volatile() };
+    }
+    pub fn bus_options(&self) -> OhciBusOptions {
+        return OhciBusOptions::new(unsafe { self.control_registers.add(8) });
+    }
+    pub fn guid(&self) -> u64 {
+        return unsafe { self.control_registers.add(10).read_volatile() } as u64
+            | unsafe { self.control_registers.add(9).read_volatile() << 32 } as u64;
+    }
+    pub fn config_rom_map_address(&self) -> u64 {
+        return unsafe { self.control_registers.add(13).read_volatile() } as u64;
+    }
+    pub fn posted_write_address(&self) -> OhciPostedWriteAddress {
+        return unsafe {
+            OhciPostedWriteAddress::new(
+                self.control_registers.add(14).read_volatile(),
+                self.control_registers.add(15).read_volatile(),
+            )
+        };
+    }
+    pub fn vendor_id(&self) -> u32 {
+        return unsafe { self.control_registers.add(16).read_volatile() };
+    }
+    pub fn hc_control_set(&self) -> OhciHcControlSet {
+        return unsafe { OhciHcControlSet::new(self.control_registers.add(0x50 / 4)) };
+    }
+    pub fn hc_control_clear(&self) -> OhciHcControlClear {
+        return unsafe { OhciHcControlClear::new(self.control_registers.add(0x54 / 4)) };
+    }
+    pub fn self_id_buffer_address(&self) -> u64 {
+        return unsafe { self.control_registers.add(0x64 / 4).read_volatile() } as u64;
+    }
+    /* val has to be 2k aligned*/
+    pub fn set_self_id_buffer_address(&mut self, val: u32) {
+        unsafe { self.control_registers.add(0x64 / 4).write_volatile(val) };
+    }
+    pub fn self_id_count(&self) -> OhciSelfIdCount {
+        return unsafe { OhciSelfIdCount::new(self.control_registers.add(0x68 / 4)) };
+    }
+    pub fn ir_multi_chan_mask_hi_set(&self) -> OhciIrMultiChanMaskSet {
+        return unsafe { OhciIrMultiChanMaskSet::new(self.control_registers.add(0x70 / 4)) };
+    }
+    pub fn ir_multi_chan_mask_hi_clear(&self) -> OhciIrMultiChanMaskClear {
+        return unsafe { OhciIrMultiChanMaskClear::new(self.control_registers.add(0x74 / 4)) };
+    }
+    pub fn ir_multi_chan_mask_lo_set(&self) -> OhciIrMultiChanMaskSet {
+        return unsafe { OhciIrMultiChanMaskSet::new(self.control_registers.add(0x78 / 4)) };
+    }
+    pub fn ir_multi_chan_mask_lo_clear(&self) -> OhciIrMultiChanMaskClear {
+        return unsafe { OhciIrMultiChanMaskClear::new(self.control_registers.add(0x7C / 4)) };
+    }
+    pub fn int_event_set(&self) -> OhciIntEventSet {
+        return unsafe { OhciIntEventSet::new(self.control_registers.add(0x80 / 4)) };
+    }
+    pub fn int_event_clear(&self) -> OhciIntEventClear {
+        return unsafe { OhciIntEventClear::new(self.control_registers.add(0x84 / 4)) };
+    }
+    pub fn int_mask_set(&self) -> OhciIntMaskSet {
+        return unsafe { OhciIntMaskSet::new(self.control_registers.add(0x88 / 4)) };
+    }
+    pub fn int_mask_clear(&self) -> OhciIntMaskClear {
+        return unsafe { OhciIntMaskClear::new(self.control_registers.add(0x8C / 4)) };
+    }
+    pub fn iso_x_mit_int_event_set(&self) -> OhciIsoXMitIntEventSet {
+        return unsafe { OhciIsoXMitIntEventSet::new(self.control_registers.add(0x90 / 4)) };
+    }
+    pub fn iso_x_mit_int_event_clear(&self) -> OhciIsoXMitIntEventClear {
+        return unsafe { OhciIsoXMitIntEventClear::new(self.control_registers.add(0x94 / 4)) };
+    }
+    pub fn iso_x_mit_int_mask_set(&self) -> OhciIsoXMitIntMaskSet {
+        return unsafe { OhciIsoXMitIntMaskSet::new(self.control_registers.add(0x98 / 4)) };
+    }
+    pub fn iso_x_mit_int_mask_clear(&self) -> OhciIsoXMitIntMaskClear {
+        return unsafe { OhciIsoXMitIntMaskClear::new(self.control_registers.add(0x9C / 4)) };
+    }
+    pub fn iso_recv_int_event_set(&self) -> OhciIsoRecvIntEventSet {
+        return unsafe { OhciIsoRecvIntEventSet::new(self.control_registers.add(0xA0 / 4)) };
+    }
+    pub fn iso_recv_int_event_clear(&self) -> OhciIsoRecvIntEventClear {
+        return unsafe { OhciIsoRecvIntEventClear::new(self.control_registers.add(0xA4 / 4)) };
+    }
+    pub fn iso_recv_int_mask_set(&self) -> OhciIsoRecvIntMaskSet {
+        return unsafe { OhciIsoRecvIntMaskSet::new(self.control_registers.add(0xA8 / 4)) };
+    }
+    pub fn iso_recv_int_mask_clear(&self) -> OhciIsoRecvIntMaskClear {
+        return unsafe { OhciIsoRecvIntMaskClear::new(self.control_registers.add(0xAC / 4)) };
+    }
+    pub fn initial_bandwidth_available(&self) -> u16 {
+        return unsafe { self.control_registers.add(0xB0 / 4).read_volatile() & 0xFFFF } as u16;
+    }
+    pub fn write_initial_bandwidth_available(&mut self, val: u16) {
+        unsafe {
+            self.control_registers
+                .add(0xB0 / 4)
+                .write_volatile((val & 0x1FFF) as u32)
+        };
+    }
+    pub fn initial_channels_available(&self) -> u64 {
+        let hi = unsafe { self.control_registers.add(0xB4 / 4).read_volatile() };
+        let lo = unsafe { self.control_registers.add(0xB8 / 4).read_volatile() };
+
+        return lo as u64 | (hi as u64) << 32;
+    }
+
+    pub fn write_initial_channels_available(&mut self, val: u64) {
+        let hi = (val >> 32) as u32;
+        let lo = (val & 0xFFFF_FFFF) as u32;
+
+        unsafe { self.control_registers.add(0xB4 / 4).write_volatile(hi) }
+        unsafe { self.control_registers.add(0xB8 / 4).write_volatile(lo) }
+    }
+
+    pub fn fairness_control(&self) -> OhciFairnessControl {
+        return unsafe { OhciFairnessControl::new(self.control_registers.add(0xDC / 4)) };
+    }
+    pub fn link_control_set(&self) -> OhciLinkControlSet {
+        return unsafe { OhciLinkControlSet::new(self.control_registers.add(0xE0 / 4)) };
+    }
+    pub fn link_control_clear(&self) -> OhciLinkControlClear {
+        return unsafe { OhciLinkControlClear::new(self.control_registers.add(0xE4 / 4)) };
+    }
+    pub fn node_id(&self) -> OhciNodeId {
+        return unsafe { OhciNodeId::new(self.control_registers.add(0xE8 / 4)) };
+    }
+    pub fn phy_control(&self) -> OhciPhyControl {
+        return unsafe { OhciPhyControl::new(self.control_registers.add(0xEC / 4)) };
+    }
+    pub fn isochronous_cycle_timer(&self) -> OhciIsochronousCycleTimer {
+        return unsafe { OhciIsochronousCycleTimer::new(self.control_registers.add(0xF0 / 4)) };
+    }
+    pub fn asynchronous_request_filter_hi_set(&self) -> OhciAsynchronousRequestFilter32Set {
+        return unsafe {
+            OhciAsynchronousRequestFilter32Set::new(self.control_registers.add(0x100 / 4))
+        };
+    }
+    pub fn asynchronous_request_filter_hi_clear(&self) -> OhciAsynchronousRequestFilter32Clear {
+        return unsafe {
+            OhciAsynchronousRequestFilter32Clear::new(self.control_registers.add(0x104 / 4))
+        };
+    }
+    pub fn asynchronous_request_filter_lo_set(&self) -> OhciAsnychronousRequestFilter32Set {
+        return unsafe {
+            OhciAsynchronousRequestFilter32Set::new(self.control_registers.add(0x108 / 4))
+        };
+    }
+    pub fn asynchronous_request_filter_lo_clear(&self) -> OhciAsynchronousRequestFilter32Clear {
+        return unsafe {
+            OhciAsynchronousRequestFilter32Clear::new(self.control_registers.add(0x10C / 4))
+        };
+    }
+    pub fn physical_request_filter_hi_set(&self) -> OhciPhysicalRequestFilter32Set {
+        return unsafe {
+            OhciPhysicalRequestFilter32Set::new(self.control_registers.add(0x110 / 4))
+        };
+    }
+    pub fn physical_request_filter_hi_clear(&self) -> OhciPhysicalRequestFilter32Clear {
+        return unsafe {
+            OhciPhysicalRequestFilter32Clear::new(self.control_registers.add(0x114 / 4))
+        };
+    }
+    pub fn physical_request_filter_lo_set(&self) -> OhciPhysicalRequestFilter32Set {
+        return unsafe {
+            OhciPhysicalRequestFilter32Set::new(self.control_registers.add(0x118 / 4))
+        };
+    }
+    pub fn physical_request_filter_lo_clear(&self) -> OhciPhysicalRequestFilter32Clear {
+        return unsafe {
+            OhciPhysicalRequestFilter32Clear::new(self.control_registers.add(0x11C / 4))
+        };
+    }
+    pub fn physical_upper_bound(&self) -> u64 {
+        return unsafe { self.control_registers.add(0x120 / 4).read_volatile() } as u64;
+    }
+    pub fn write_physical_upper_bound(&mut self, val: u64) {
+        return unsafe {
+            self.control_registers
+                .add(0x120 / 4)
+                .write_volatile(val as u32)
+        };
+    }
+}

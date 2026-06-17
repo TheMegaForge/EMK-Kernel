@@ -1,0 +1,19 @@
+
+[[bin]]
+name = "emkk"
+test = false
+bench = false
+
+[profile.dev]
+panic = "abort"
+[profile.release]
+panic = "abort"
+
+[package]
+name = "emkk"
+version = "0.1.0"
+edition = "2024"
+authors = ["theMW"]
+
+[dependencies]
+libm = "0.2"

@@ -1,0 +1,18 @@
+
+[unstable]
+json-target-spec = true
+build-std = ["core", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+[build]
+target = "emkk.json"
+
+[target.emkk]
+rustflags = [
+    "-C", "link-arg=/mnt/e/EMKK_KernelRs/emkk/out/memory_impl.o",
+    "-C", "link-arg=/mnt/e/EMKK_KernelRs/emkk/out/x86_64.o",
+    "-C", "link-arg=/mnt/e/EMKK_KernelRs/emkk/out/interrupts_impl.o",
+    "-C", "link-arg=/mnt/e/EMKK_KernelRs/emkk/out/bootstrap.o",
+    "-C", "link-arg=/mnt/e/EMKK_KernelRs/emkk/out/time.o",
+    "-C", "link-arg=/mnt/e/EMKK_KernelRs/emkk/out/context_switch.o",
+    "-C", "link-arg=-Tlinker.ld"
+]

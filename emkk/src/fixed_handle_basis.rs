@@ -1,0 +1,1 @@
+pub const FIXED_FS_HANDLE_BASE: u32 = 0x1000; /* SIZE = 0x20000*/
