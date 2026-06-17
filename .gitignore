@@ -1,2 +1,3 @@
-out/*
-winapi/kernel32/KERNEL32.dll
+emkk/out/
+emkk/applications/test001/test001.exe
+emkk/winapi/kernel32/KERNEL32.dll
