@@ -3,99 +3,78 @@ use core::ptr::null_mut;
 use crate::{drivers::usb::independent::HciState, hal::print::simple_kernel_panic};
 
 pub struct HcsParams {
-    address: *const u32,
+    val: *const u32,
 }
 
 type PortRoutingRule = u8;
 
-pub const N_PORTS_MASK: u32 = 0b1111;
-pub const N_PCC_MASK: u32 = 0b1111;
-pub const N_CC_MASK: u32 = 0b1111;
-pub const DEBUG_PORT_NUMBER_MASK: u32 = 0b1111;
+#[repr(u32)]
+pub enum HcsParamsPart {
+    NPorts = (0xF << 16) | 0,
+    Npcc = (0xF << 16) | 8,
+    Ncc = (0xF << 16) | 12,
+    DebugPortNumber = (0xF << 16) | 20,
+}
+#[repr(u32)]
+pub enum HcsParamsBitPart {
+    PortPowerControl = 4,
+    PortRoutingRules = 7,
+    PortIndicators = 16,
+}
 
 impl HcsParams {
     #[inline(always)]
     pub fn new(address: u64) -> HcsParams {
         return HcsParams {
-            address: address as *const u32,
+            val: address as *const u32,
         };
     }
 
-    /*
-     *
-     */
-    #[inline(always)]
-    pub fn n_ports(&self) -> u8 {
-        return unsafe { self.address.read_volatile() & N_PORTS_MASK } as u8;
+    pub fn get(&self, what_to_get: HcsParamsPart) -> u32 {
+        let val = unsafe { self.val.read_volatile() };
+        let get_u32 = what_to_get as u32;
+        return (val >> (get_u32 & 0xFF)) & (get_u32 >> 16);
     }
 
-    #[inline(always)]
-    pub fn ppc(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 4) & 1 };
-    }
-
-    #[inline(always)]
-    pub fn port_routing_rules(&self) -> PortRoutingRule {
-        return unsafe { (self.address.read_volatile() >> 7) & 1 } as PortRoutingRule;
-    }
-
-    #[inline(always)]
-    pub fn n_pcc(&self) -> u8 {
-        return unsafe { (self.address.read_volatile() >> 8) & N_PCC_MASK } as u8;
-    }
-
-    #[inline(always)]
-    pub fn n_cc(&self) -> u8 {
-        return unsafe { (self.address.read_volatile() >> 12) & N_CC_MASK } as u8;
-    }
-
-    #[inline(always)]
-    pub fn p_indicator(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 16) & 1 };
-    }
-
-    #[inline(always)]
-    pub fn debug_port_number(&self) -> u8 {
-        return unsafe { (self.address.read_volatile() >> 20) & DEBUG_PORT_NUMBER_MASK } as u8;
+    pub fn is_set(&self, what_to_check: HcsParamsBitPart) -> bool {
+        let val = unsafe { self.val.read_volatile() };
+        return 0 != (val & (1 << what_to_check as u32));
     }
 }
 
 pub struct HccParams {
-    address: *const u32,
+    val: *const u32,
 }
 
-pub const ISOCHRONOUS_SCHEDULING_THRESHOLD: u32 = 0b1111;
-pub const EECP_MASK: u32 = 0b11111111;
+#[repr(u32)]
+pub enum HccParamsPart {
+    IsochronousSchedulingThreshold = (0xF << 16) | 4,
+    Eecp = (0xFF << 16) | 8,
+}
+#[repr(u32)]
+pub enum HccParamsBitPart {
+    QwordBitAddressingCapability = 0, /* QWord = 64 */
+    ProgrammableFrameListFlag = 1,
+    AsynchronousScheduleParkCapability = 2,
+}
 
 impl HccParams {
     #[inline(always)]
     pub fn new(address: u64) -> HccParams {
         return HccParams {
-            address: address as *const u32,
+            val: address as *const u32,
         };
     }
 
-    #[inline(always)]
-    pub fn qword_addressing_capability(&self) -> u8 {
-        return unsafe { self.address.read_volatile() & 1 } as u8;
+    pub fn get(&self, what_to_get: HccParamsPart) -> u32 {
+        let val = unsafe { self.val.read_volatile() };
+        let get_u32 = what_to_get as u32;
+        return (val >> (get_u32 & 0xFF)) & (get_u32 >> 16);
     }
 
-    #[inline(always)]
-    pub fn programmable_frame_list_flag(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 1) & 1 };
-    }
-    #[inline(always)]
-    pub fn asynchronous_schedule_park_capability(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 2) & 1 };
-    }
-    #[inline(always)]
-    pub fn isochronous_scheduling_threshold(&self) -> u8 {
-        return unsafe { (self.address.read_volatile() >> 4) & ISOCHRONOUS_SCHEDULING_THRESHOLD }
-            as u8;
-    }
-    #[inline(always)]
-    pub fn eecp(&self) -> u8 {
-        return unsafe { (self.address.read_volatile() >> 8) & EECP_MASK } as u8;
+    pub fn is_set(&self, what_to_check: HccParamsBitPart) -> bool {
+        let val = unsafe { self.val.read_volatile() };
+        return 0 != (val & (1 << what_to_check as u32));
     }
 }
 
@@ -109,11 +88,11 @@ impl HcspPortRoute {
         return HcspPortRoute { address };
     }
 }
-
+#[repr(u32)]
 pub enum FrameListSize {
-    Count1024,
-    Count512,
-    Count256,
+    Count1024 = 0,
+    Count512 = 1,
+    Count256 = 2,
 }
 
 impl FrameListSize {
@@ -126,25 +105,16 @@ impl FrameListSize {
             _ => simple_kernel_panic("FrameListSize/new", "Invalid value\n"),
         };
     }
-
-    #[inline(always)]
-    pub fn as_u32(&self) -> u32 {
-        return match self {
-            Self::Count1024 => 0,
-            Self::Count512 => 1,
-            Self::Count256 => 2,
-        };
-    }
 }
-
+#[repr(u32)]
 pub enum InterruptThresholdControl {
-    MicroFrames1,
-    MicroFrames2,
-    MicroFrames4,
-    MicroFrames8,  // 1ms
-    MicroFrames16, // 2ms
-    MicroFrames32, // 4ms
-    MicroFrames64, // 8ms
+    MicroFrames1 = 1,
+    MicroFrames2 = 2,
+    MicroFrames4 = 4,
+    MicroFrames8 = 8,   // 1ms
+    MicroFrames16 = 16, // 2ms
+    MicroFrames32 = 32, // 4ms
+    MicroFrames64 = 64, // 8ms
 }
 
 impl InterruptThresholdControl {
@@ -161,312 +131,159 @@ impl InterruptThresholdControl {
             _ => simple_kernel_panic("InterruptThresholdControl/new", "Invalid value\n"),
         };
     }
-
-    #[inline(always)]
-    pub fn as_u32(&self) -> u32 {
-        return match self {
-            Self::MicroFrames1 => 1,
-            Self::MicroFrames2 => 2,
-            Self::MicroFrames4 => 4,
-            Self::MicroFrames8 => 8,
-            Self::MicroFrames16 => 16,
-            Self::MicroFrames32 => 32,
-            Self::MicroFrames64 => 64,
-        };
-    }
 }
 
 pub struct UsbCmd {
-    address: *mut u32,
+    val: *mut u32,
 }
 
-pub const SET_RS_MASK: u32 = 1 << 0;
-pub const SET_HCRESET_MASK: u32 = 1 << 1;
-pub const SET_FRAME_LIST_SIZE_MASK: u32 = 0b11 << 2;
-pub const SET_PERIODIC_SCHEDULE_ENABLE_MASK: u32 = 1 << 4;
-pub const SET_ASYNCHRONOUS_SCHEDULE_ENABLE_MASK: u32 = 1 << 5;
-pub const SET_INTERRUPT_ON_ASYNC_ADVANCE_DOORBELL_MASK: u32 = 1 << 6;
-pub const SET_INTERRUPT_THRESHOLD_CONTROL_MASK: u32 = 0b11111111 << 16;
-
-pub const INTERRUPT_THRESHOLD_CONTROL_MASK: u32 = 0b11111111;
+#[repr(u32)]
+pub enum UsbCmdPart {
+    FrameListSize = (0x3 << 16) | 2,
+    AsynchronousScheduleParkModeCount = (0x3 << 16) | 8,
+    InterruptThresholdControl = (0xFF << 16) | 16,
+}
+#[repr(u32)]
+pub enum UsbCmdBitPart {
+    /** Run/Stop */
+    Rs = 0,
+    /** Host Controller Reset*/
+    HcReset = 1,
+    PeriodicScheduleEnable = 4,
+    AsynchronousScheduleEnable = 5,
+    InterruptOnAsyncAdvanceDoorbell = 6,
+    LightHostControllerReset = 7,
+    AsynchronousScheduleParkModeEnable = 11,
+}
 
 impl UsbCmd {
     #[inline(always)]
     pub fn new(address: u64) -> UsbCmd {
         return UsbCmd {
-            address: address as *mut u32,
+            val: address as *mut u32,
         };
     }
 
-    #[inline(always)]
-    pub fn rs(&self) -> HciState {
-        return HciState::from_bool(1 == unsafe { self.address.read_volatile() & 1 });
+    pub fn is_set(&self, what_to_check: UsbCmdBitPart) -> bool {
+        let val = unsafe { self.val.read_volatile() };
+        return 0 != (val & (1 << what_to_check as u32));
     }
 
-    #[inline(always)]
-    pub fn hcreset(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 1) & 1 };
-    }
-    #[inline(always)]
-    pub fn frame_list_size(&self) -> FrameListSize {
-        return FrameListSize::new((unsafe { self.address.read_volatile() } >> 2) & 2);
-    }
-    #[inline(always)]
-    pub fn periodic_schedule_enable(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 4) & 1 };
-    }
-    #[inline(always)]
-    pub fn asynchronous_schedule_enable(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 5) & 1 };
-    }
-    #[inline(always)]
-    pub fn interrupt_on_async_advance_doorbell(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 6) & 1 };
-    }
-    #[inline(always)]
-    pub fn interrupt_threshold_control(&self) -> InterruptThresholdControl {
-        return InterruptThresholdControl::new(
-            (unsafe { self.address.read_volatile() } >> 16) & INTERRUPT_THRESHOLD_CONTROL_MASK,
-        );
-    }
-
-    #[inline(always)]
-    pub fn set_rs(&mut self, val: bool) {
+    pub fn set(&mut self, what_to_set: UsbCmdBitPart, val: bool) {
+        let mut prev_val = unsafe { self.val.read_volatile() };
+        let set_u32 = what_to_set as u32;
+        prev_val &= !(1 << set_u32);
         unsafe {
-            self.address
-                .write_volatile((self.address.read_volatile() & (!SET_RS_MASK)) | val as u32);
-        }
-    }
-    #[inline(always)]
-    pub fn set_hcreset(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                (self.address.read_volatile() & (!SET_HCRESET_MASK)) | (val as u32) << 1,
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_frame_list_size(&mut self, frame_list_size: FrameListSize) {
-        unsafe {
-            self.address.write_volatile(
-                (self.address.read_volatile() & (!SET_FRAME_LIST_SIZE_MASK))
-                    | (frame_list_size.as_u32() << 2),
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_periodic_schedule_enable(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                (self.address.read_volatile() & (!SET_PERIODIC_SCHEDULE_ENABLE_MASK))
-                    | ((val as u32) << 4),
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_asynchronous_schedule_enable(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                (self.address.read_volatile() & (!SET_ASYNCHRONOUS_SCHEDULE_ENABLE_MASK))
-                    | ((val as u32) << 5),
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_interrupt_on_async_advance_doorbell(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                (self.address.read_volatile() & (!SET_INTERRUPT_ON_ASYNC_ADVANCE_DOORBELL_MASK))
-                    | ((val as u32) << 6),
-            );
+            self.val
+                .write_volatile(prev_val | ((val as u32) << set_u32))
         }
     }
 
-    pub fn set_interrupt_threshold_control(&mut self, threshold: InterruptThresholdControl) {
-        unsafe {
-            let value = self.address.read_volatile() & (!SET_INTERRUPT_THRESHOLD_CONTROL_MASK);
-            self.address
-                .write_volatile(value | (threshold.as_u32() << 16));
-        }
+    pub fn get(&self, what_to_get: UsbCmdPart) -> u32 {
+        let val = unsafe { self.val.read_volatile() };
+        let get_u32 = what_to_get as u32;
+        return (val >> (get_u32 & 0xFF)) & (get_u32 >> 16);
     }
+
+    pub fn set_part(&self, what_to_get: UsbCmdPart, val: u32) {
+        let mut prev_val = unsafe { self.val.read_volatile() };
+        let set_u32 = what_to_get as u32;
+        prev_val &= !((set_u32 >> 16) << (set_u32 & 0xFF));
+        prev_val |= (val & (set_u32 >> 16)) << (set_u32 & 0xFF);
+        unsafe { self.val.write_volatile(prev_val) }
+    }
+}
+#[repr(u32)]
+pub enum UsbStsBitPart {
+    /** USB Interrupt*/
+    UsbInt = 0,
+    /** USB Error Interrupt*/
+    UsbErrInt = 1,
+    PortChangeDetected = 2,
+    /** Clears on Write*/
+    FrameListRollOver = 3,
+    HostSystemError = 4,
+    InterruptOnAsyncAdvance = 5,
+    HcHalted = 12,
+    Reclamation = 13,
+    PeriodicScheduleStatus = 14,
+    AsynchronousScheduleStatus = 15,
 }
 
 pub struct UsbSts {
-    address: *mut u32,
+    val: *mut u32,
 }
 impl UsbSts {
     #[inline(always)]
     pub fn new(address: u64) -> UsbSts {
         return UsbSts {
-            address: address as *mut u32,
+            val: address as *mut u32,
         };
     }
     #[inline(always)]
     pub fn as_u32(&self) -> u32 {
-        return unsafe { *self.address };
+        return unsafe { *self.val };
     }
 
-    #[inline(always)]
-    pub fn usbint(&self) -> bool {
-        return 1 == unsafe { self.address.read_volatile() & 1 };
+    pub fn is_set(&self, what_to_check: UsbStsBitPart) -> bool {
+        let val = unsafe { self.val.read_volatile() };
+        return 0 != (val & (1 << what_to_check as u32));
     }
-    #[inline(always)]
-    pub fn usberrint(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 1) & 1 };
-    }
-    #[inline(always)]
-    pub fn port_change_detected(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 2) & 1 };
-    }
-    #[inline(always)]
-    pub fn frame_list_rollover(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 3) & 1 };
-    }
-    #[inline(always)]
-    pub fn host_system_error(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 4) & 1 };
-    }
-    #[inline(always)]
-    pub fn interrupt_on_async_advance(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 5) & 1 };
-    }
-    #[inline(always)]
-    pub fn hchalted(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 12) & 1 };
-    }
-    #[inline(always)]
-    pub fn reclamation(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 13) & 1 };
-    }
-    #[inline(always)]
-    pub fn periodic_schedule_status(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 14) & 1 };
-    }
-    #[inline(always)]
-    pub fn asynchronous_schedule_status(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 15) & 1 };
-    }
-    #[inline(always)]
 
-    pub fn clear_usbint(&mut self) {
-        unsafe { self.address.write_volatile(1 << 0) };
+    pub fn set(&mut self, what_to_set: UsbStsBitPart) {
+        let mut prev_val = unsafe { self.val.read_volatile() };
+        let set_u32 = what_to_set as u32;
+        prev_val &= !(1 << set_u32);
+        unsafe { self.val.write_volatile(prev_val | (1 << set_u32)) }
     }
-    #[inline(always)]
-    pub fn clear_usberrint(&mut self) {
-        unsafe { self.address.write_volatile(1 << 1) };
+    /*
+    pub fn get(&self, what_to_get: UsbStsPart) -> u32 {
+        let val = unsafe { self.val.read_volatile() };
+        let get_u32 = what_to_get as u32;
+        return (val >> (get_u32 & 0xFF)) & (get_u32 >> 16);
     }
-    #[inline(always)]
-    pub fn clear_port_change_detected(&mut self) {
-        unsafe { self.address.write_volatile(1 << 2) };
+
+    pub fn set_part(&self, what_to_get: UsbStsPart, val: u32) {
+        let mut prev_val = unsafe { self.val.read_volatile() };
+        let set_u32 = what_to_get as u32;
+        prev_val &= !((set_u32 >> 16) << (set_u32 & 0xFF));
+        prev_val |= (val & (set_u32 >> 16)) << (set_u32 & 0xFF);
+        unsafe { self.val.write_volatile(prev_val) }
     }
-    #[inline(always)]
-    pub fn clear_frame_list_rollover(&mut self) {
-        unsafe { self.address.write_volatile(1 << 3) };
-    }
-    #[inline(always)]
-    pub fn clear_host_system_error(&mut self) {
-        unsafe { self.address.write_volatile(1 << 4) };
-    }
-    #[inline(always)]
-    pub fn clear_interrupt_on_async_advance(&mut self) {
-        unsafe { self.address.write_volatile(1 << 5) };
-    }
+    */
 }
 
-pub const SET_USB_INTERRUPT_ENABLE_MASK: u32 = 1 << 0;
-pub const SET_USB_ERROR_INTERRUPT_ENABLE_MASK: u32 = 1 << 1;
-pub const SET_PORT_CHANGE_INTERRUPT_ENABLE_MASK: u32 = 1 << 2;
-pub const SET_FRAME_LIST_ROLLOVER_ENABLE_MASK: u32 = 1 << 3;
-pub const SET_HOST_SYSTEM_ERROR_ENABLE_MASK: u32 = 1 << 4;
-pub const SET_INTERRUPT_ON_ASYNC_ADVANCE_ENABLE_MASK: u32 = 1 << 5;
+#[repr(u32)]
+pub enum UsbIntrBitPart {
+    UsbInterruptEnable = 0,
+    UsbErrorInterruptEnable = 1,
+    PortChangeInterruptEnable = 2,
+    FrameListRolloverEnable = 3,
+    HostSystemErrorEnable = 4,
+    InterruptOnAsyncAdvanceEnable = 5,
+}
 
 pub struct UsbIntr {
-    address: *mut u32,
+    val: *mut u32,
 }
 impl UsbIntr {
     #[inline(always)]
     pub fn new(address: u64) -> UsbIntr {
         return UsbIntr {
-            address: address as *mut u32,
+            val: address as *mut u32,
         };
     }
 
-    #[inline(always)]
-    pub fn usb_interrupt_enable(&self) -> bool {
-        return 1 == unsafe { self.address.read_volatile() & 1 };
+    pub fn is_set(&self, what_to_check: UsbStsBitPart) -> bool {
+        let val = unsafe { self.val.read_volatile() };
+        return 0 != (val & (1 << what_to_check as u32));
     }
-    #[inline(always)]
-    pub fn usb_error_interrupt_enable(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 1) & 1 };
-    }
-    #[inline(always)]
-    pub fn port_change_interrupt_enable(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 2) & 1 };
-    }
-    #[inline(always)]
-    pub fn frame_list_rollover_enable(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 3) & 1 };
-    }
-    #[inline(always)]
-    pub fn host_system_error_enable(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 4) & 1 };
-    }
-    #[inline(always)]
-    pub fn interrupt_on_async_advance_enable(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 5) & 1 };
-    }
-    #[inline(always)]
-    pub fn set_usb_interrupt_enable(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_USB_INTERRUPT_ENABLE_MASK) | val as u32,
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_usb_error_interrupt_enable(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_USB_ERROR_INTERRUPT_ENABLE_MASK)
-                    | ((val as u32) << 1),
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_port_change_interrupt_enable(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_PORT_CHANGE_INTERRUPT_ENABLE_MASK)
-                    | ((val as u32) << 2),
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_frame_list_rollover_enable(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_FRAME_LIST_ROLLOVER_ENABLE_MASK)
-                    | ((val as u32) << 3),
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_host_system_error_enable(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_HOST_SYSTEM_ERROR_ENABLE_MASK)
-                    | ((val as u32) << 4),
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_interrupt_on_async_advance_enable(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_INTERRUPT_ON_ASYNC_ADVANCE_ENABLE_MASK)
-                    | ((val as u32) << 5),
-            );
-        }
+
+    pub fn set(&mut self, what_to_set: UsbIntrBitPart) {
+        let mut prev_val = unsafe { self.val.read_volatile() };
+        let set_u32 = what_to_set as u32;
+        prev_val &= !(1 << set_u32);
+        unsafe { self.val.write_volatile(prev_val | (1 << set_u32)) }
     }
 }
 #[derive(Clone)]
@@ -501,7 +318,6 @@ impl FrIndex {
     }
 
     #[inline(always)]
-    // Info: The value is being left shifted by 3
     pub fn set_frame_index(&mut self, frame_index: u16) {
         unsafe { self.address.write_volatile((frame_index << 3) as u32) };
     }
@@ -651,205 +467,68 @@ impl PortTestControl {
     }
 }
 
-pub const LINE_STATUS_MASK: u32 = 0b11;
-pub const PORT_INDICATOR_CONTROL_MASK: u32 = 0b11;
-pub const PORT_TEST_CONTROL_MASK: u32 = 0b1111;
-
-pub const SET_PORT_ENABLED_DISABLED_MASK: u32 = 1 << 2;
-pub const SET_FORCE_PORT_RESUME_MASK: u32 = 1 << 6;
-pub const SET_SUSPEND_MASK: u32 = 1 << 7;
-pub const SET_PORT_RESET_MASK: u32 = 1 << 8;
-pub const SET_PORT_POWER_MASK: u32 = 1 << 12;
-pub const SET_PORT_OWNER_MASK: u32 = 1 << 13;
-pub const SET_PORT_TEST_CONTROL_MASK: u32 = 0b1111 << 16;
-pub const SET_WAKE_ON_CONNECT_ENABLE_MASK: u32 = 1 << 20;
-pub const SET_WAKE_ON_DISCONNECT_ENABLE_MASK: u32 = 1 << 21;
-pub const SET_WAKE_ON_OVER_CURRENT_ENABLE_MASK: u32 = 1 << 22;
+#[repr(u32)]
+pub enum PortScPart {
+    LineStatus = (0x3 << 16) | 10,
+    PortIndicatorControl = (0x3 << 16) | 14,
+    PortTestControl = (0xF << 16) | 16,
+}
+#[repr(u32)]
+pub enum PortScBitPart {
+    CurrentConnectStatus = 0,
+    ConnectStatusChange = 1,
+    PortEnabledDisabled = 2,
+    PortEnabledDisabledChanged = 3,
+    OverCurrentActive = 4,
+    OverCurrentChange = 5,
+    ForcePortResume = 6,
+    Suspend = 7,
+    PortReset = 8,
+    PortPower = 12,
+    PortOwner = 13,
+    WakeOnConnectEnable = 20,
+    WakeOnDisconnectEnable = 21,
+    WakeOnOverCurrentEnable = 22,
+}
 
 pub struct PortSc {
-    address: *mut u32,
+    val: *mut u32,
 }
 impl PortSc {
     #[inline(always)]
     pub fn new(address: u64) -> PortSc {
         return PortSc {
-            address: address as *mut u32,
+            val: address as *mut u32,
         };
-    }
-    #[inline(always)]
-    pub fn as_u32(&self) -> u32 {
-        return unsafe { self.address.read_volatile() };
     }
 
-    #[inline(always)]
-    pub fn current_connect_status(&self) -> bool {
-        return 1 == unsafe { self.address.read_volatile() & 1 };
+    pub fn is_set(&self, what_to_check: PortScBitPart) -> bool {
+        let val = unsafe { self.val.read_volatile() };
+        return 0 != (val & (1 << what_to_check as u32));
     }
-    #[inline(always)]
-    pub fn connect_status_change(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 1) & 1 };
-    }
-    #[inline(always)]
-    pub fn port_enabled_disabled(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 2) & 1 };
-    }
-    #[inline(always)]
-    pub fn port_enable_disable_change(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 3) & 1 };
-    }
-    #[inline(always)]
-    pub fn over_current_active(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 4) & 1 };
-    }
-    #[inline(always)]
-    pub fn over_current_change(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 5) & 1 };
-    }
-    #[inline(always)]
-    pub fn force_port_resume(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 6) & 1 };
-    }
-    #[inline(always)]
-    pub fn suspend(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 7) & 1 };
-    }
-    #[inline(always)]
-    pub fn port_reset(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 8) & 1 };
-    }
-    #[inline(always)]
-    pub fn line_status(&self) -> LineStatus {
-        return LineStatus::new(unsafe { self.address.read_volatile() >> 10 } & LINE_STATUS_MASK);
-    }
-    #[inline(always)]
-    pub fn port_power(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 12) & 1 };
-    }
-    #[inline(always)]
-    pub fn port_owner(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 13) & 1 };
-    }
-    #[inline(always)]
-    pub fn port_indicator_control(&self) -> PortIndicatorControl {
-        return PortIndicatorControl::new(
-            unsafe { self.address.read_volatile() >> 15 } & PORT_INDICATOR_CONTROL_MASK,
-        );
-    }
-    #[inline(always)]
-    pub fn port_test_control(&self) -> PortTestControl {
-        return PortTestControl::new(
-            unsafe { self.address.read_volatile() >> 16 } & PORT_TEST_CONTROL_MASK,
-        );
-    }
-    #[inline(always)]
-    pub fn wake_on_connect_enable(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 20) & 1 };
-    }
-    #[inline(always)]
-    pub fn wake_on_disconnect_enable(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 21) & 1 };
-    }
-    #[inline(always)]
-    pub fn wake_on_over_current_enable(&self) -> bool {
-        return 1 == unsafe { (self.address.read_volatile() >> 22) & 1 };
-    }
-    #[inline(always)]
 
-    pub fn clear_connect_status_change(&mut self) {
-        unsafe { self.address.write_volatile(1 << 1) };
-    }
-    #[inline(always)]
-    pub fn set_port_enabled_disabled(&mut self, val: bool) {
+    pub fn set(&mut self, what_to_set: PortScBitPart, val: bool) {
+        let mut prev_val = unsafe { self.val.read_volatile() };
+        let set_u32 = what_to_set as u32;
+        prev_val &= !(1 << set_u32);
         unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_PORT_ENABLED_DISABLED_MASK)
-                    | (val as u32) << 2,
-            )
-        };
+            self.val
+                .write_volatile(prev_val | ((val as u32) << set_u32))
+        }
     }
-    #[inline(always)]
-    pub fn clear_port_enable_disable_change(&mut self) {
-        unsafe { self.address.write_volatile(1 << 3) };
+
+    pub fn get(&self, what_to_get: PortScPart) -> u32 {
+        let val = unsafe { self.val.read_volatile() };
+        let get_u32 = what_to_get as u32;
+        return (val >> (get_u32 & 0xFF)) & (get_u32 >> 16);
     }
-    #[inline(always)]
-    pub fn clear_over_current_change(&mut self) {
-        unsafe { self.address.write_volatile(1 << 5) };
-    }
-    #[inline(always)]
-    pub fn set_force_port_resume(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_FORCE_PORT_RESUME_MASK) | (val as u32) << 6,
-            )
-        };
-    }
-    #[inline(always)]
-    pub fn set_suspend(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_SUSPEND_MASK) | (val as u32) << 7,
-            )
-        };
-    }
-    #[inline(always)]
-    pub fn set_port_reset(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_PORT_RESET_MASK) | (val as u32) << 8,
-            )
-        };
-    }
-    #[inline(always)]
-    pub fn set_port_power(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_PORT_POWER_MASK) | (val as u32) << 12,
-            )
-        };
-    }
-    #[inline(always)]
-    pub fn set_port_owner(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_PORT_OWNER_MASK) | (val as u32) << 13,
-            )
-        };
-    }
-    #[inline(always)]
-    pub fn set_port_test_control(&mut self, port_test_control: PortTestControl) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_PORT_TEST_CONTROL_MASK)
-                    | port_test_control.as_u32() << 16,
-            )
-        };
-    }
-    #[inline(always)]
-    pub fn set_wake_on_connect_enable(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_WAKE_ON_CONNECT_ENABLE_MASK)
-                    | (val as u32) << 20,
-            )
-        };
-    }
-    #[inline(always)]
-    pub fn set_wake_on_disconnect_enable(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_WAKE_ON_DISCONNECT_ENABLE_MASK)
-                    | (val as u32) << 21,
-            )
-        };
-    }
-    #[inline(always)]
-    pub fn set_wake_on_over_current_enable(&mut self, val: bool) {
-        unsafe {
-            self.address.write_volatile(
-                self.address.read_volatile() & (!SET_WAKE_ON_OVER_CURRENT_ENABLE_MASK)
-                    | (val as u32) << 22,
-            )
-        };
+
+    pub fn set_part(&self, what_to_get: PortScPart, val: u32) {
+        let mut prev_val = unsafe { self.val.read_volatile() };
+        let set_u32 = what_to_get as u32;
+        prev_val &= !((set_u32 >> 16) << (set_u32 & 0xFF));
+        prev_val |= (val & (set_u32 >> 16)) << (set_u32 & 0xFF);
+        unsafe { self.val.write_volatile(prev_val) }
     }
 }
 

@@ -4,10 +4,18 @@ use crate::{
     arch::{isr::ISRRegisters, lapic::LocalApic},
     drivers::usb::{
         ehci::{
+            self,
             data_structures::{
                 AsynchronousList, PeriodicFrameList, QueueElementTransferDescriptor, QueueHead,
             },
-            registers::{Fladj, InterruptThresholdControl, LineStatus, UsbBase},
+            registers::{
+                Fladj, InterruptThresholdControl, LineStatus,
+                PortScBitPart::{self, ConnectStatusChange},
+                PortScPart, UsbBase,
+                UsbCmdBitPart::{self, HcReset, PeriodicScheduleEnable},
+                UsbCmdPart, UsbIntrBitPart,
+                UsbStsBitPart::{self, PeriodicScheduleStatus, PortChangeDetected, UsbInt},
+            },
             structures::{device::EhciDevice, endpoint::EhciEndpoint},
         },
         independent::UsbControllerInformation,
@@ -23,7 +31,7 @@ use crate::{
     info,
     multithreading::processors::Processor,
     time::sleep,
-    utils::{allocators::PageAllocator, list::List, queue::Queue},
+    utils::{allocators::PageAllocator, invalid_mut_slice, list::List, queue::Queue},
     warn,
 };
 
@@ -52,7 +60,7 @@ pub struct Ehci {
     periodic_list: PeriodicFrameList,
     asynchronous_list: AsynchronousList,
     isr_vector: u8,
-    devices: PageAllocator<EhciDevice>,
+    devices: &'static mut [EhciDevice],
     memory_space: Allocator,
     data_packet_base: u32,
     endpoint_interrupted: bool,
@@ -121,7 +129,7 @@ fn ehci_interrupt(_registers: &ISRRegisters) {
                 }
             }
             if from_periodic_list {
-                ehci_controller.usbbase.usbsts().clear_usbint();
+                ehci_controller.usbbase.usbsts().set(UsbInt);
                 LocalApic::from_local_core().send_eoi();
                 return;
             }
@@ -135,38 +143,35 @@ fn ehci_interrupt(_registers: &ISRRegisters) {
                 qh.clear_status_bit(7);
                 qh.next_qtd_pointer().set_terminate(true);
             }
-
-            ehci_controller.usbbase.usbsts().clear_usbint();
+            ehci_controller.usbbase.usbsts().set(UsbInt);
         }
 
         4 /* Port Change Detected*/ => {
-
-            for p in 0..ehci_controller.usbbase.hcsparams().n_ports() {
+            for p in 0..ehci_controller.usbbase.hcsparams().get(registers::HcsParamsPart::NPorts) as u8{
                 let mut port = ehci_controller.usbbase.portsc(p);
-                let _portu32 = port.as_u32();
-                if port.connect_status_change() {
-                    if !port.current_connect_status() {
+                if port.is_set(ConnectStatusChange){
+                    if !port.is_set(PortScBitPart::CurrentConnectStatus) {
                         let mut device_detached = false;
                         // Find device which corresponds to the port and detach it.
-                        for d in 0..ehci_controller.devices.size() {
-                           let device = ehci_controller.devices.as_mut(d).unwrap();
-                           if device.get_port() == p {
-                               device.detach();
-                               device_detached = true;
-                           }
+
+                        for device in &mut *ehci_controller.devices {
+                            if device.get_port() == p {
+                                device.detach();
+                                device_detached = true;
+                            }
                         }
+
                         if !device_detached {
                             warn!(&mut ehci_controller.module, "undetected device deattached from eHC\n");
                         }
                     }else {
                         //TODO: Implement USB Device Attaching.
                         simple_kernel_panic("ehci_interrupt", "USB Device Attached\n");
-
                     }
-                    port.clear_connect_status_change();
+                    port.set(PortScBitPart::ConnectStatusChange, true );
                 }
             }
-            ehci_controller.usbbase.usbsts().clear_port_change_detected();
+            ehci_controller.usbbase.usbsts().set(PortChangeDetected);
         }
         _ => {
             error!(&mut ehci_controller.module, "Unhandled Status Interrupt 0x{:x}\n", _status);
@@ -214,7 +219,7 @@ impl Ehci {
             module: Module::empty(),
             periodic_list: PeriodicFrameList::empty(),
             asynchronous_list: AsynchronousList::empty(),
-            devices: PageAllocator::empty(),
+            devices: invalid_mut_slice(),
             isr_vector: 0,
             memory_space: Allocator::empty(),
             data_packet_base: 0,
@@ -230,41 +235,47 @@ impl Ehci {
     }
 
     // Chapter 4.2.2
-    fn reset_port(&mut self, port_: u8, default_control_endpoint_setup_data_packet_base: u32) {
+    // Returns true, if high speed device, otherwise returns false
+    fn reset_port(
+        &mut self,
+        port_: u8,
+        default_control_endpoint_setup_data_packet_base: u32,
+    ) -> bool {
         let mut port = self.usbbase.portsc(port_);
         {
-            port.set_port_reset(true);
-            port.set_port_enabled_disabled(false);
+            port.set(PortScBitPart::PortReset, true);
+            port.set(PortScBitPart::PortEnabledDisabled, false);
             sleep(200);
-            port.set_port_reset(false);
+            port.set(PortScBitPart::PortReset, false);
 
-            if port.port_enabled_disabled() {
+            if port.is_set(PortScBitPart::PortEnabledDisabled) {
                 info!(
                     &mut self.module,
                     "Port {} is connected to a high speed device\n", port_
                 );
             } else {
-                port.set_port_owner(true);
-                self.usbbase.usbsts().clear_port_change_detected();
-                port.clear_port_enable_disable_change();
-                return;
+                port.set(PortScBitPart::PortOwner, true);
+                self.usbbase.usbsts().set(PortChangeDetected);
+                port.set(PortScBitPart::PortEnabledDisabledChanged, true);
+                return false; /* Device is low/full speed*/
             }
 
-            if let LineStatus::K = port.line_status() {
-                port.set_port_owner(true);
-                self.usbbase.usbsts().clear_port_change_detected();
-                port.clear_port_enable_disable_change();
-                return;
+            if let LineStatus::K = LineStatus::new(port.get(PortScPart::LineStatus)) {
+                port.set(PortScBitPart::PortOwner, true);
+                self.usbbase.usbsts().set(PortChangeDetected);
+                port.set(PortScBitPart::PortEnabledDisabledChanged, true);
+                return false; /* Device is low/full speed*/
             }
 
-            self.devices.push_back(EhciDevice::new_reset(
+            self.devices[port_ as usize] = EhciDevice::new_reset(
                 &mut self.memory_space,
                 port_,
                 port_,
                 default_control_endpoint_setup_data_packet_base,
-            ));
+            );
         }
-        self.usbbase.usbsts().clear_port_change_detected();
+        self.usbbase.usbsts().set(PortChangeDetected);
+        return true;
     }
 
     /*
@@ -277,25 +288,28 @@ impl Ehci {
 
         self.stop();
         self.reset();
-        self.usbbase.usbsts().clear_port_change_detected();
+        self.usbbase.usbsts().set(PortChangeDetected);
         let mut usbintr = self.usbbase.usbintr();
-        usbintr.set_usb_error_interrupt_enable(true);
-        usbintr.set_usb_interrupt_enable(true);
-        //usbintr.set_port_change_interrupt_enable(true); // THIS WILL BE SET AFTER PORT RESET
-        usbintr.set_host_system_error_enable(true);
-        let mut periodic_list = PeriodicFrameList::new(&mut self.memory_space);
-        periodic_list.set(self);
-        self.periodic_list = periodic_list;
-        let async_list = AsynchronousList::new(&mut self.memory_space);
-        async_list.set(self);
-        self.asynchronous_list = async_list;
+        usbintr.set(UsbIntrBitPart::UsbErrorInterruptEnable);
+        usbintr.set(UsbIntrBitPart::UsbInterruptEnable);
+        usbintr.set(UsbIntrBitPart::HostSystemErrorEnable);
+        /* Port Change Interrupt will be set after Port Reset*/
+
+        self.periodic_list = PeriodicFrameList::new(&mut self.memory_space);
+        self.periodic_list.set(&mut self.usbbase);
+        self.asynchronous_list = AsynchronousList::new(&mut self.memory_space);
+        self.asynchronous_list
+            .set(&mut self.usbbase.asynclistaddr());
+
         let mut usbcmd = self.usbbase.usbcmd();
-        usbcmd.set_interrupt_threshold_control(InterruptThresholdControl::MicroFrames32);
-        usbcmd.set_periodic_schedule_enable(false);
-        usbcmd.set_asynchronous_schedule_enable(false);
+        usbcmd.set_part(
+            UsbCmdPart::InterruptThresholdControl,
+            InterruptThresholdControl::MicroFrames32 as u32,
+        );
+        usbcmd.set(UsbCmdBitPart::PeriodicScheduleEnable, false);
+        usbcmd.set(UsbCmdBitPart::AsynchronousScheduleEnable, false);
 
         self.start();
-        //INFO: Must be set after fully configuring the host controller.
         self.usbbase.configflag().set_cf(true);
     }
 }
@@ -308,23 +322,34 @@ impl Ehci {
      */
     pub fn reset(&mut self) {
         self.stop();
-        self.usbbase.usbcmd().set_hcreset(true);
+        self.usbbase.usbcmd().set(HcReset, true);
         // Waits until the controller is resetted
-        while self.usbbase.usbcmd().hcreset() {}
+        while self.usbbase.usbcmd().is_set(HcReset) {}
     }
 
     fn stop_async(&mut self) {
         self.usbbase
             .usbcmd()
-            .set_asynchronous_schedule_enable(false);
-        while self.usbbase.usbsts().asynchronous_schedule_status() {}
+            .set(UsbCmdBitPart::AsynchronousScheduleEnable, false);
+        while self
+            .usbbase
+            .usbsts()
+            .is_set(UsbStsBitPart::AsynchronousScheduleStatus)
+        {}
     }
     fn start_async(&mut self) {
-        self.usbbase.usbcmd().set_asynchronous_schedule_enable(true);
-        while !self.usbbase.usbsts().asynchronous_schedule_status() {}
+        self.usbbase
+            .usbcmd()
+            .set(UsbCmdBitPart::AsynchronousScheduleEnable, true);
+
+        while self
+            .usbbase
+            .usbsts()
+            .is_set(UsbStsBitPart::AsynchronousScheduleStatus)
+        {}
     }
     fn start_periodic(&mut self) {
-        self.usbbase.usbcmd().set_periodic_schedule_enable(true);
-        while !self.usbbase.usbsts().periodic_schedule_status() {}
+        self.usbbase.usbcmd().set(PeriodicScheduleEnable, true);
+        while !self.usbbase.usbsts().is_set(PeriodicScheduleStatus) {}
     }
 }
