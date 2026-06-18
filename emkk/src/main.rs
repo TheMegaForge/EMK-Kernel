@@ -18,7 +18,7 @@ use crate::{
     time::sleep,
     utils::intrin::rdmsr,
 };
-use core::{arch::asm, error, ffi::c_void, panic::PanicInfo};
+use core::{error, ffi::c_void, panic::PanicInfo};
 
 pub mod acpi_tables;
 pub mod aml;
@@ -92,12 +92,14 @@ pub extern "C" fn kentry(
         };
         let local_apic_address = rdmsr(0x1B) & !0xFFF;
         #[allow(static_mut_refs)]
-        HOST_CORE_PAGER.page_4_kb(
-            FIXED_LOCAL_APIC_VIRTUAL_ADDRESS,
-            local_apic_address,
-            PAGER_PRESENT | PAGER_RW | PAGER_PCD,
-            physical_allocator,
-        );
+        HOST_CORE_PAGER
+            .page_4_kb(
+                FIXED_LOCAL_APIC_VIRTUAL_ADDRESS,
+                local_apic_address,
+                PAGER_PRESENT | PAGER_RW | PAGER_PCD,
+                physical_allocator,
+            )
+            .unwrap();
         #[allow(static_mut_refs)]
         switch_framebuffer_location(&mut HOST_CORE_PAGER, physical_allocator);
         gdt_switch_address(physical_allocator, virtual_allocator);

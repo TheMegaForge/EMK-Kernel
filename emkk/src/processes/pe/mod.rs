@@ -723,7 +723,7 @@ impl<'b> PeCoff<'b> {
                 if section.virtual_size > PAGER_2MIB {
                     match phys_mb.map_efficient(kernel_allocator, pager, paging.va, paging.flags) {
                         Some(_) => {
-                            kernel_allocator.free(&phys_mb);
+                            let _ = kernel_allocator.free(&phys_mb);
                             return Option::Some(ExecutableLoadError::MemoryError);
                         }
                         None => {}
@@ -731,7 +731,7 @@ impl<'b> PeCoff<'b> {
                 } else {
                     match phys_mb.map(kernel_allocator, pager, paging.va, paging.flags) {
                         Some(_) => {
-                            kernel_allocator.free(&phys_mb);
+                            let _ = kernel_allocator.free(&phys_mb);
                             return Option::Some(ExecutableLoadError::MemoryError);
                         }
                         None => {}
