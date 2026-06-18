@@ -44,11 +44,13 @@ pub trait UsbInterface {
     fn get_protocol(&self) -> u8;
 
     fn get_endpoint(&self, index: u16) -> Option<&dyn UsbEndpoint>;
+    fn get_mut_endpoint(&mut self, index: u16) -> Option<&mut dyn UsbEndpoint>;
 }
 
 pub trait UsbConfiguration {
     fn get_interface_count(&self) -> u8;
     fn get_interface(&self, index: u8) -> Option<&dyn UsbInterface>;
+    fn get_mut_interface(&mut self, index: u8) -> Option<&mut dyn UsbInterface>;
     fn get_hid_interface(&self, index: u8) -> Option<&UsbHID>;
 }
 

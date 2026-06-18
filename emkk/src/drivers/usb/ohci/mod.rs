@@ -177,6 +177,7 @@ impl UsbController for OhciController {
             sleep(10);
         }
 
+        /* This sets up the OhciDevice and assignes a control ep to each device*/
         for i in 0..self.num_potential_devices {
             let mut status = self.bar.hc_rh_port_status(i as u32 + 1);
             if status.is_set(data_structures::OhciRhPortStatusBitPart::Ccs) {
