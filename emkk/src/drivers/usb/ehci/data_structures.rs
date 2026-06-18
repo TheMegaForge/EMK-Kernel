@@ -1,21 +1,29 @@
 use core::{ffi::c_void, ptr::null_mut};
 
 use crate::{
+    aml::Device,
     drivers::usb::{
+        self,
         ehci::{
             Ehci,
-            registers::{FrIndex, FrameListSize},
+            data_structures::{QueueHeadBitPart::T, QueueHeadPart::Type},
+            registers::{
+                AsyncListAddr, FrIndex, FrameListSize, HccParamsBitPart::ProgrammableFrameListFlag,
+                HccParamsPart, UsbBase, UsbCmdPart,
+            },
         },
         independent::Direction,
+        ohci::structures::device,
     },
     hal::{memory::allocator::Allocator, print::simple_kernel_panic},
     utils::memory::memset_dword,
 };
 #[derive(Clone, Copy)]
+#[repr(u32)]
 pub enum EndpointSpeed {
-    FullSpeed,
-    LowSpeed,
-    HighSpeed,
+    FullSpeed = 0,
+    LowSpeed = 1,
+    HighSpeed = 2,
 }
 
 impl EndpointSpeed {
@@ -27,19 +35,12 @@ impl EndpointSpeed {
             _ => simple_kernel_panic("EndpointSpeed/from_raw", "invalid value\n"),
         };
     }
-    pub fn as_u32(&self) -> u32 {
-        return match *self {
-            Self::FullSpeed => 0,
-            Self::LowSpeed => 1,
-            Self::HighSpeed => 2,
-        };
-    }
 }
-
+#[repr(u32)]
 pub enum Mult {
-    OneTransactionPerMicroframe,
-    TwoTransactionPerMicroframe,
-    ThreeTransactionPerMicroframe,
+    OneTransactionPerMicroframe = 1,
+    TwoTransactionPerMicroframe = 2,
+    ThreeTransactionPerMicroframe = 3,
 }
 
 impl Mult {
@@ -49,56 +50,6 @@ impl Mult {
             0b10 => Self::TwoTransactionPerMicroframe,
             0b11 => Self::ThreeTransactionPerMicroframe,
             _ => simple_kernel_panic("Mult/from_raw", "Invalid value\n"),
-        };
-    }
-    pub fn as_u32(&self) -> u32 {
-        return match self {
-            Self::OneTransactionPerMicroframe => 1,
-            Self::TwoTransactionPerMicroframe => 2,
-            Self::ThreeTransactionPerMicroframe => 3,
-        };
-    }
-}
-
-pub struct QueueHeadHorizontalLinkPointer {
-    address: *mut u32,
-}
-
-pub const QUEUE_HEAD_HORIZONTAL_LINK_POINTER_MASK: u32 = (1 << ((31 - 5) + 1)) - 1;
-
-impl QueueHeadHorizontalLinkPointer {
-    #[inline(always)]
-    pub fn new(address: u64) -> QueueHeadHorizontalLinkPointer {
-        return QueueHeadHorizontalLinkPointer {
-            address: address as *mut u32,
-        };
-    }
-
-    #[inline(always)]
-    pub fn terminate(&self) -> bool {
-        return 1 == unsafe { *self.address } & 1;
-    }
-    #[inline(always)]
-    pub fn _type(&self) -> EhciCommonType0 {
-        return EhciCommonType0::from_raw(unsafe { *self.address } >> 1);
-    }
-    #[inline(always)]
-    pub fn link_pointer(&self) -> u32 {
-        return unsafe { *self.address >> 5 } << 5;
-    }
-    #[inline(always)]
-    pub fn set_terminate(&mut self, val: bool) {
-        unsafe { *self.address = (*self.address & !1) | val as u32 };
-    }
-    #[inline(always)]
-    pub fn set_type(&mut self, _type: EhciCommonType0) {
-        unsafe { *self.address = (*self.address & !(0b11 << 1)) | _type.as_u32() << 1 };
-    }
-    #[inline(always)]
-    pub fn set_link_pointer(&mut self, val: u32) {
-        unsafe {
-            *self.address =
-                (*self.address & !(QUEUE_HEAD_HORIZONTAL_LINK_POINTER_MASK << 5)) | (val >> 5) << 5
         };
     }
 }
@@ -164,9 +115,52 @@ impl QueueHeadBufferPointer {
         return (unsafe { *self.address >> 5 } & 0b1111111) as u8;
     }
 }
+
+#[repr(u32)]
+pub enum QueueHeadPart {
+    Type = (0x3 << 10) | (1 << 4) | 0,
+    DeviceAddress = (0x3F << 10) | (0 << 4) | 1,
+    /** Endpoint Number*/
+    Endpt = (0xF << 10) | (8 << 4) | 1,
+    /** Endpoint Speed*/
+    Eps = (0x3 << 10) | (12 << 4) | 1,
+    MaximumPacketLength = (0x7FF << 10) | (16 << 4) | 1,
+    /** Nak Count Reload*/
+    Nak = (0xF << 10) | (28 << 4) | 1,
+
+    MikroFrameSMask = (0xFF << 10) | (0 << 4) | 2,
+    MikroFrameCMask = (0xFF << 10) | (8 << 4) | 2,
+    HubAddr = (0x7F << 10) | (16 << 4) | 2,
+    PortNumber = (0x7F << 10) | (23 << 4) | 2,
+    /** High-Bandwidth Pipe Multiplier*/
+    Mult = (0x3 << 10) | (30 << 4) | 2,
+    Status = (0xFF << 10) | (0 << 4) | 6,
+    PidCode = (0x3 << 10) | (8 << 4) | 6,
+    ErrorCounter = (0x3 << 10) | (10 << 4) | 6,
+    CurrentPage = (0x7 << 10) | (12 << 4) | 6,
+    TotalBytesToTransfer = (0x7FFFF << 10) | (16 << 4) | 6,
+}
+#[repr(u32)]
+pub enum QueueHeadBitPart {
+    /** Terminate ( for the Queue Head Horizontal Link Pointer) aka DWORD 0*/
+    T = (0 << 16) | 0,
+    /** Inactive on Next Transaction*/
+    I = (7 << 16) | 1,
+    /** Data Toggle Control*/
+    Dtc = (14 << 16) | 1,
+    /** Head of Reclamation List Flag*/
+    H = (15 << 16) | 1,
+    /** Control Endpoint Flag */
+    C = (27 << 16) | 1,
+    /** Interrupt on Complete */
+    Ioc = (15 << 16) | 6,
+    /** Data Toggle*/
+    Dt = (31 << 16) | 6,
+}
+
 #[derive(Clone, Copy)]
 pub struct QueueHead {
-    address: *mut u32,
+    val: *mut u32,
 }
 
 pub const MAXIMUM_PACKET_LENGTH_MASK: u32 = (1u32 << ((26 - 16) + 1)) - 1;
@@ -176,35 +170,59 @@ impl QueueHead {
     #[inline(always)]
     pub fn new(address: u64) -> Self {
         return QueueHead {
-            address: address as *mut u32,
+            val: address as *mut u32,
         };
+    }
+
+    pub fn chain_next_qh(&mut self, address: u32) {
+        self.set_part(Type, EhciLinkType::Qh as u32);
+        self.set_horizontal_link_pointer(address);
+        self.set(T, false);
+    }
+
+    pub fn set_common_info(
+        &mut self,
+        eps: EndpointSpeed,
+        device_address: u8,
+        maximum_packet_length: u16,
+        endpoint_number: u8,
+        mult: Mult,
+    ) {
+        self.set_part(QueueHeadPart::Eps, eps as u32);
+        self.set_part(QueueHeadPart::DeviceAddress, device_address as u32);
+        self.set_part(
+            QueueHeadPart::MaximumPacketLength,
+            maximum_packet_length as u32,
+        );
+        self.set_part(QueueHeadPart::Endpt, endpoint_number as u32);
+        self.set_part(QueueHeadPart::Mult, mult as u32);
     }
 
     pub fn high_speed_initialize(
         &mut self,
         endpoint_number: u8,
         device_address: u8,
-        maximum_packet_size: u16,
+        maximum_packet_length: u16,
         data_toggle_control: bool,
         next_qh: Option<&QueueHead>,
         next_qtd: &QueueElementTransferDescriptor,
         mult: Mult,
     ) {
         self.reset();
-        self.set_endpoint_speed(EndpointSpeed::HighSpeed);
-        self.set_endpoint_number(endpoint_number);
-        self.set_device_address(device_address);
-        self.set_maximum_packet_length(maximum_packet_size);
-        self.set_data_toggle_control(data_toggle_control);
-        self.set_mult(mult);
+        self.set_part(QueueHeadPart::Eps, EndpointSpeed::HighSpeed as u32);
+        self.set_part(QueueHeadPart::Endpt, endpoint_number as u32);
+        self.set_part(QueueHeadPart::DeviceAddress, device_address as u32);
+        self.set_part(
+            QueueHeadPart::MaximumPacketLength,
+            maximum_packet_length as u32,
+        );
+        self.set(QueueHeadBitPart::Dtc, data_toggle_control);
+        self.set_part(QueueHeadPart::Mult, mult as u32);
 
         if let Option::Some(qh) = next_qh {
-            self.horizontal_link_pointer().set_type(EhciCommonType0::QH);
-            self.horizontal_link_pointer()
-                .set_link_pointer(qh.get_address());
-            self.horizontal_link_pointer().set_terminate(false);
+            self.chain_next_qh(qh.get_address());
         } else {
-            self.horizontal_link_pointer().set_terminate(true);
+            self.set(T, true);
         }
 
         self.next_qtd_pointer()
@@ -212,139 +230,96 @@ impl QueueHead {
         self.next_qtd_pointer().set_terminate(false);
     }
 
+    pub fn is_set(&self, bit_part: QueueHeadBitPart) -> bool {
+        let part_u32 = bit_part as u32;
+        let val = unsafe { self.val.add((part_u32 & 0xF) as usize).read_volatile() };
+        return 1 == val >> (part_u32 >> 16) & 1;
+    }
+
+    pub fn set(&mut self, bit_part: QueueHeadBitPart, val: bool) {
+        let part_u32 = bit_part as u32;
+        let mut prev_val = unsafe { self.val.add((part_u32 & 0xF) as usize).read_volatile() };
+        prev_val &= !(1 << (part_u32 >> 16));
+        prev_val |= (val as u32) << (part_u32 >> 16);
+        unsafe {
+            self.val
+                .add((part_u32 & 0xF) as usize)
+                .write_volatile(prev_val)
+        }
+    }
+
+    pub fn get_part(&self, part: QueueHeadPart) -> u32 {
+        let part_u32 = part as u32;
+        let val = unsafe { self.val.add((part_u32 & 0xF) as usize).read_volatile() };
+        return (val >> ((part_u32 >> 4) & 0x1F)) & (part_u32 >> 10);
+    }
+    pub fn set_part(&mut self, part: QueueHeadPart, val: u32) {
+        let part_u32 = part as u32;
+        let mut prev_val = unsafe { self.val.add((part_u32 & 0xF) as usize).read_volatile() };
+        prev_val &= !((part_u32 >> 10) << ((part_u32 >> 4) & 0x1F));
+        prev_val |= (val & (part_u32 >> 10)) << ((part_u32 >> 4) & 0x1F);
+        unsafe {
+            self.val
+                .add((part_u32 & 0xF) as usize)
+                .write_volatile(prev_val)
+        }
+    }
+
     #[inline(always)]
     pub fn get_address(&self) -> u32 {
-        return self.address as u32;
+        return self.val as u32;
     }
 
     #[inline(always)]
     pub fn reset(&mut self) {
         // 1´s written => terminate = 1
         unsafe {
-            self.address.write_volatile(1);
-            *self.address.add(1) = 0;
-            *self.address.add(2) = 0;
-            *self.address.add(3) = 0;
-            *self.address.add(4) = 1;
-            *self.address.add(5) = 1;
-            *self.address.add(6) = 0;
-            *self.address.add(7) = 0;
-            *self.address.add(8) = 0;
-            *self.address.add(9) = 0;
-            *self.address.add(10) = 0;
-            *self.address.add(11) = 0;
+            self.val.write_volatile(1);
+            *self.val.add(1) = 0;
+            *self.val.add(2) = 0;
+            *self.val.add(3) = 0;
+            *self.val.add(4) = 1;
+            *self.val.add(5) = 1;
+            *self.val.add(6) = 0;
+            *self.val.add(7) = 0;
+            *self.val.add(8) = 0;
+            *self.val.add(9) = 0;
+            *self.val.add(10) = 0;
+            *self.val.add(11) = 0;
         }
     }
 
     #[inline(always)]
-    pub fn horizontal_link_pointer(&self) -> QueueHeadHorizontalLinkPointer {
-        return QueueHeadHorizontalLinkPointer::new(self.address as u64);
-    }
-    #[inline(always)]
-    pub fn device_address(&self) -> u8 {
-        return (unsafe { *self.address.add(1) } & 0b1111_111) as u8;
-    }
-    #[inline(always)]
-    pub fn inactivate_on_next_transaction(&self) -> bool {
-        return 1 == (unsafe { *self.address.add(1) } >> 7) & 1;
-    }
-    #[inline(always)]
-    pub fn endpoint_number(&self) -> u8 {
-        return ((unsafe { *self.address.add(1) } >> 8) & 0b1111) as u8;
-    }
-    #[inline(always)]
-    pub fn endpoint_speed(&self) -> EndpointSpeed {
-        return EndpointSpeed::from_raw((unsafe { *self.address.add(1) } >> 12) & 0b11);
-    }
-    #[inline(always)]
-    pub fn data_toggle_control(&self) -> bool {
-        return 1 == (unsafe { *self.address.add(1) } >> 14) & 1;
-    }
-    #[inline(always)]
-    pub fn head_of_reclamation_list_flag(&self) -> bool {
-        return 1 == (unsafe { *self.address.add(1) } >> 15) & 1;
-    }
-    #[inline(always)]
-    pub fn maximum_packet_length(&self) -> u16 {
-        return ((unsafe { *self.address.add(1) } >> 16) & MAXIMUM_PACKET_LENGTH_MASK) as u16;
-    }
-    #[inline(always)]
-    pub fn control_endpoint_flag(&self) -> bool {
-        return 1 == (unsafe { *self.address.add(1) } >> 27) & 1;
-    }
-    #[inline(always)]
-    pub fn nak_count_reload(&self) -> u8 {
-        return ((unsafe { *self.address.add(1) } >> 28) & 0b1111) as u8;
+    pub fn horizontal_link_pointer(&self) -> u32 {
+        return unsafe { (self.val.add(0).read_volatile() >> 5) } << 5;
     }
 
     #[inline(always)]
-    pub fn frame_s_mask(&self) -> u8 {
-        return (unsafe { *self.address.add(2) } & 0b11111111) as u8;
-    }
-    #[inline(always)]
-    pub fn frame_c_mask(&self) -> u8 {
-        return ((unsafe { *self.address.add(2) } >> 8) & 0b11111111) as u8;
-    }
-    #[inline(always)]
-    pub fn hub_addr(&self) -> u8 {
-        return ((unsafe { *self.address.add(2) } >> 16) & 0b1111111) as u8;
-    }
-    #[inline(always)]
-    pub fn port_number(&self) -> u8 {
-        return ((unsafe { *self.address.add(2) } >> 23) & 0b1111111) as u8;
-    }
-    #[inline(always)]
-    pub fn mult(&self) -> Mult {
-        return Mult::from_raw((unsafe { *self.address.add(2) } >> 30) & 0b11);
+    pub fn set_horizontal_link_pointer(&mut self, address: u32) {
+        let mut val = unsafe { self.val.add(0).read_volatile() };
+        val &= !(0x7FFFFFF << 5);
+        val |= address & !0x1F;
+        unsafe { self.val.add(0).write_volatile(val) }
     }
 
     #[inline(always)]
     pub fn current_qtd_pointer(&self) -> u32 {
-        return unsafe { *self.address.add(3) >> 5 } << 5;
+        return unsafe { *self.val.add(3) >> 5 } << 5;
     }
 
     #[inline(always)]
     pub fn next_qtd_pointer(&self) -> qTDPointer {
-        return qTDPointer::new(unsafe { self.address.add(4) } as u64);
+        return qTDPointer::new(unsafe { self.val.add(4) } as u64);
     }
 
     #[inline(always)]
     pub fn alternate_next_qtd_pointer(&self) -> AlternateNextqTDPointer {
-        return AlternateNextqTDPointer::new(unsafe { self.address.add(5) } as u64);
-    }
-
-    #[inline(always)]
-    pub fn status(&self) -> u8 {
-        return (unsafe { *self.address.add(6) } & 0b11111111) as u8;
-    }
-    #[inline(always)]
-    pub fn pid_code(&self) -> PidCode {
-        return PidCode::from_raw((unsafe { *self.address.add(6) } >> 8) & 0b11);
-    }
-    #[inline(always)]
-    pub fn error_counter(&self) -> u8 {
-        return ((unsafe { *self.address.add(6) } >> 10) & 0b11) as u8;
-    }
-    #[inline(always)]
-    pub fn current_page(&self) -> u8 {
-        return ((unsafe { *self.address.add(6) } >> 12) & 0b111) as u8;
-    }
-    #[inline(always)]
-    pub fn interrupt_on_complete(&self) -> bool {
-        return 1 == (unsafe { *self.address.add(6) } >> 15) & 1;
-    }
-    #[inline(always)]
-    pub fn total_bytes_to_transfer(&self) -> u16 {
-        return ((unsafe { *self.address.add(6) } >> 16) & TOTAL_BYTES_TO_TRANSFER_MASK) as u16;
-    }
-    #[inline(always)]
-    pub fn data_toggle(&self) -> bool {
-        return 1 == (unsafe { *self.address.add(6) } >> 31) & 1;
+        return AlternateNextqTDPointer::new(unsafe { self.val.add(5) } as u64);
     }
 
     #[inline(always)]
     fn buffer_pointer(&self, page: u8) -> QueueHeadBufferPointer {
-        return QueueHeadBufferPointer::new(unsafe { self.address.add(7 + page as usize) } as u64);
+        return QueueHeadBufferPointer::new(unsafe { self.val.add(7 + page as usize) } as u64);
     }
 
     #[inline(always)]
@@ -371,135 +346,18 @@ impl QueueHead {
     #[inline(always)]
     pub fn set_status_bit(&mut self, bit: u8) {
         unsafe {
-            self.address
+            self.val
                 .add(6)
-                .write(self.address.add(6).read() | (1 << bit) as u32)
+                .write(self.val.add(6).read() | (1 << bit) as u32)
         };
     }
     #[inline(always)]
     pub fn clear_status_bit(&mut self, bit: u8) {
         unsafe {
-            self.address
+            self.val
                 .add(6)
-                .write(self.address.add(6).read() & !((1 << bit) as u32))
+                .write(self.val.add(6).read() & !((1 << bit) as u32))
         };
-    }
-    #[inline(always)]
-    pub fn set_device_address(&mut self, val: u8) {
-        unsafe {
-            self.address
-                .add(1)
-                .write((self.address.add(1).read() & !0b1111_111) | (val as u32) & 0b1111_111)
-        };
-    }
-    #[inline(always)]
-    pub fn set_inactive_on_next_transaction(&mut self, val: bool) {
-        unsafe {
-            self.address
-                .add(1)
-                .write((self.address.add(1).read() & !(1 << 7)) | (val as u32) << 7)
-        };
-    }
-    #[inline(always)]
-    pub fn set_endpoint_number(&mut self, endpoint_number: u8) {
-        unsafe {
-            self.address.add(1).write(
-                (self.address.add(1).read() & !(0b1111 << 8))
-                    | ((endpoint_number as u32) & 0b1111) << 8,
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_endpoint_speed(&mut self, endpoint_speed: EndpointSpeed) {
-        unsafe {
-            self.address.add(1).write(
-                (self.address.add(1).read() & !(0b11 << 12)) | endpoint_speed.as_u32() << 12,
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_data_toggle_control(&mut self, val: bool) {
-        unsafe {
-            self.address
-                .add(1)
-                .write((self.address.add(1).read() & !(1 << 14)) | (val as u32) << 14);
-        }
-    }
-    #[inline(always)]
-    pub fn set_head_of_reclaimation_list_flag(&mut self, val: bool) {
-        unsafe {
-            self.address
-                .add(1)
-                .write((self.address.add(1).read() & !(1 << 15)) | (val as u32) << 15);
-        }
-    }
-    #[inline(always)]
-    pub fn set_maximum_packet_length(&mut self, length: u16) {
-        unsafe {
-            self.address.add(1).write(
-                (self.address.add(1).read() & !(MAXIMUM_PACKET_LENGTH_MASK << 16))
-                    | (length as u32) << 16,
-            )
-        };
-    }
-    #[inline(always)]
-    pub fn set_endpoint_control_flag(&mut self, val: bool) {
-        unsafe {
-            self.address
-                .add(1)
-                .write((self.address.add(1).read() & !(1 << 27)) | (val as u32) << 27);
-        }
-    }
-    #[inline(always)]
-    pub fn set_nak_count_reload(&mut self, val: u8) {
-        unsafe {
-            self.address.add(1).write(
-                (self.address.add(1).read() & !(0b1111 << 28)) | ((val as u32) & 0b1111) << 28,
-            );
-        }
-    }
-
-    #[inline(always)]
-    pub fn set_frame_s_mask(&mut self, val: u8) {
-        unsafe {
-            self.address
-                .add(2)
-                .write((self.address.add(2).read() & !0b11111111) | val as u32);
-        }
-    }
-    #[inline(always)]
-    pub fn set_frame_c_mask(&mut self, val: u8) {
-        unsafe {
-            self.address
-                .add(2)
-                .write((self.address.add(2).read() & !(0b11111111 << 8)) | (val as u32) << 8);
-        }
-    }
-    #[inline(always)]
-    pub fn set_hub_addr(&mut self, val: u8) {
-        unsafe {
-            self.address.add(2).write(
-                (self.address.add(2).read() & !(0b1111111 << 16))
-                    | ((val as u32) & 0b1111111) << 16,
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_port_number(&mut self, val: u8) {
-        unsafe {
-            self.address.add(2).write(
-                (self.address.add(2).read() & !(0b1111111 << 23))
-                    | ((val as u32) & 0b1111111) << 23,
-            );
-        }
-    }
-    #[inline(always)]
-    pub fn set_mult(&mut self, val: Mult) {
-        unsafe {
-            self.address
-                .add(2)
-                .write((self.address.add(2).read() & !(0b11 << 30)) | val.as_u32() << 30);
-        }
     }
 }
 
@@ -573,7 +431,7 @@ impl IsochronousTransferDescriptorBuffer {
 
     #[inline(always)]
     pub fn set_mult(&mut self, mult: Mult) {
-        unsafe { *self.address = (*self.address & !(0b11)) | mult.as_u32() }
+        unsafe { *self.address = (*self.address & !(0b11)) | mult as u32 }
     }
 }
 
@@ -683,8 +541,8 @@ impl IsochronousTransferDescriptor {
         return unsafe { self.address.read() & 1 } == 1;
     }
     #[inline(always)]
-    pub fn _type(&self) -> EhciCommonType0 {
-        return EhciCommonType0::from_raw(unsafe { (self.address.read() >> 1) & 0b11 });
+    pub fn _type(&self) -> EhciLinkType {
+        return EhciLinkType::from_raw(unsafe { (self.address.read() >> 1) & 0b11 });
     }
     #[inline(always)]
     pub fn next_link_pointer(&self) -> u32 {
@@ -835,8 +693,8 @@ impl SplitTransactionTransferDescriptor {
         return unsafe { self.address.read() & 1 } == 1;
     }
     #[inline(always)]
-    pub fn _type(&self) -> EhciCommonType0 {
-        return EhciCommonType0::from_raw(unsafe { (self.address.read() >> 1) & 0b11 });
+    pub fn _type(&self) -> EhciLinkType {
+        return EhciLinkType::from_raw(unsafe { (self.address.read() >> 1) & 0b11 });
     }
     #[inline(always)]
     pub fn next_link_pointer(&self) -> u32 {
@@ -1234,8 +1092,8 @@ impl NormalPathLinkPointer {
         return 1 == unsafe { *self.address } & 1;
     }
     #[inline(always)]
-    pub fn _type(&self) -> EhciCommonType0 {
-        return EhciCommonType0::from_raw(unsafe { *self.address >> 1 } & 0b11);
+    pub fn _type(&self) -> EhciLinkType {
+        return EhciLinkType::from_raw(unsafe { *self.address >> 1 } & 0b11);
     }
     #[inline(always)]
     pub fn link_pointer(&self) -> u32 {
@@ -1247,7 +1105,7 @@ impl NormalPathLinkPointer {
         unsafe { *self.address = (*self.address & !1) | val as u32 };
     }
     #[inline(always)]
-    pub fn set_type(&mut self, _type: EhciCommonType0) {
+    pub fn set_type(&mut self, _type: EhciLinkType) {
         unsafe { *self.address = (*self.address & !(0b11 << 1)) | _type.as_u32() << 1 };
     }
     #[inline(always)]
@@ -1275,8 +1133,8 @@ impl BackPathLinkPointer {
         return 1 == unsafe { *self.address } & 1;
     }
     #[inline(always)]
-    pub fn _type(&self) -> EhciCommonType0 {
-        return EhciCommonType0::from_raw(unsafe { *self.address >> 1 } & 0b11);
+    pub fn _type(&self) -> EhciLinkType {
+        return EhciLinkType::from_raw(unsafe { *self.address >> 1 } & 0b11);
     }
     #[inline(always)]
     pub fn link_pointer(&self) -> u32 {
@@ -1288,7 +1146,7 @@ impl BackPathLinkPointer {
         unsafe { *self.address = (*self.address & !1) | val as u32 };
     }
     #[inline(always)]
-    pub fn set_type(&mut self, _type: EhciCommonType0) {
+    pub fn set_type(&mut self, _type: EhciLinkType) {
         unsafe { *self.address = (*self.address & !(0b11 << 1)) | _type.as_u32() << 1 };
     }
     #[inline(always)]
@@ -1319,31 +1177,31 @@ impl PeriodicFrameSpanTraversalNode {
     }
 }
 
-#[allow(non_camel_case_types)]
 #[derive(Clone, Copy)]
-pub enum EhciCommonType0 {
-    iTD,
-    QH,
-    siTD,
-    FSTN,
+#[repr(u32)]
+pub enum EhciLinkType {
+    Itd = 0,
+    Qh = 1,
+    Sitd = 2,
+    Fstn = 3,
 }
 
-impl EhciCommonType0 {
+impl EhciLinkType {
     pub fn from_raw(value: u32) -> Self {
         return match value {
-            0b00 => Self::iTD,
-            0b01 => Self::QH,
-            0b10 => Self::siTD,
-            0b11 => Self::FSTN,
+            0b00 => Self::Itd,
+            0b01 => Self::Qh,
+            0b10 => Self::Sitd,
+            0b11 => Self::Fstn,
             _ => simple_kernel_panic("FrameListElementPointerType/from_raw", "Invalid value\n"),
         };
     }
     pub fn as_u32(&self) -> u32 {
         return match self {
-            Self::iTD => 0,
-            Self::QH => 1,
-            Self::siTD => 2,
-            Self::FSTN => 3,
+            Self::Itd => 0,
+            Self::Qh => 1,
+            Self::Sitd => 2,
+            Self::Fstn => 3,
         };
     }
 }
@@ -1351,24 +1209,24 @@ impl EhciCommonType0 {
 pub struct FrameListElementPointer {
     link_pointer: u32,
     terminate: bool,
-    _type: EhciCommonType0,
+    r#type: EhciLinkType,
 }
 
 impl FrameListElementPointer {
     pub fn from_raw(val: u32) -> FrameListElementPointer {
         let link_pointer = (val >> 5) << 5;
         let terminate = 1 == val & 1;
-        let _type = EhciCommonType0::from_raw(val >> 1);
+        let r#type = EhciLinkType::from_raw(val >> 1);
         return FrameListElementPointer {
             link_pointer,
             terminate,
-            _type,
+            r#type,
         };
     }
 
     #[inline(always)]
-    pub fn get_type(&self) -> EhciCommonType0 {
-        return self._type.clone();
+    pub fn get_type(&self) -> EhciLinkType {
+        return self.r#type.clone();
     }
 
     #[inline(always)]
@@ -1407,6 +1265,9 @@ impl Default for PeriodicFrameList {
     }
 }
 
+pub const ISOCHRONOUS_CHACHING_POSSIBLE: u16 = 1 << 3;
+pub const EHC_ISOCHRONOUS_STATE_HOLD_IN_MICRO_FRAMES_MASK: u16 = 0x7; /* Section 2.2.4*/
+
 impl PeriodicFrameList {
     pub const BASE_THRESHOLD: u16 = 6; // In micro-frames (so 1/2 of an iTD)
 
@@ -1434,31 +1295,34 @@ impl PeriodicFrameList {
 
         return periodic_frame_list;
     }
-    pub fn set(&mut self, ehci: &mut Ehci) {
-        self.frindex = ehci.usbbase.frindex().clone();
+    pub fn set(&mut self, usb_base: &mut UsbBase) {
+        self.frindex = usb_base.frindex().clone();
 
         // Ehci Specification - Chapter 3.1
-        if ehci.usbbase.hccparams().programmable_frame_list_flag() {
+        if usb_base.hccparams().is_set(ProgrammableFrameListFlag) {
             // also the default value
-            ehci.usbbase
+            usb_base
                 .usbcmd()
-                .set_frame_list_size(FrameListSize::Count1024);
+                .set_part(UsbCmdPart::FrameListSize, FrameListSize::Count1024 as u32);
         }
 
-        let base = ehci.usbbase.hccparams().isochronous_scheduling_threshold() as u16;
+        let base = usb_base
+            .hccparams()
+            .get(HccParamsPart::IsochronousSchedulingThreshold) as u16;
 
         if base == 0 {
             self.frame_threshold = PeriodicFrameList::BASE_THRESHOLD;
-        } else if base == 1 << 7 {
+        } else if base == ISOCHRONOUS_CHACHING_POSSIBLE {
             self.frame_threshold = PeriodicFrameList::BASE_THRESHOLD + 16;
             // Chapter 4.7.2.1 says that if the current micro-frame % 8 == 7 => iTD can be added safetly after 2 Frames.
-        } else if base & ((1 << 3) - 1) != 0 {
-            self.frame_threshold = PeriodicFrameList::BASE_THRESHOLD + 2 + base & ((1 << 3) - 1);
+        } else if base & EHC_ISOCHRONOUS_STATE_HOLD_IN_MICRO_FRAMES_MASK != 0 {
+            self.frame_threshold = PeriodicFrameList::BASE_THRESHOLD + 2 + base
+                & EHC_ISOCHRONOUS_STATE_HOLD_IN_MICRO_FRAMES_MASK;
             // Chapter 4.7.2.1. + 2 is just for safety
         }
 
-        ehci.usbbase.frindex().set_frame_index(0);
-        ehci.usbbase
+        usb_base.frindex().set_frame_index(0);
+        usb_base
             .periodiclistbase()
             .set_base_address(self.address as u32);
     }
@@ -1468,7 +1332,7 @@ impl PeriodicFrameList {
         return FrameListElementPointer::from_raw(val);
     }
 
-    pub fn set_element(&self, frame: u16, qh_address: u32, _type: EhciCommonType0) {
+    pub fn set_element(&self, frame: u16, qh_address: u32, _type: EhciLinkType) {
         unsafe { *self.address.add(frame as usize) = qh_address | _type.as_u32() << 1 };
     }
 
@@ -1534,19 +1398,20 @@ impl AsynchronousList {
         for i in 0..AsynchronousList::NUMBER_OF_ENTRIES {
             let mut qh = QueueHead::new(ret.address_of_index(i as u16) as u64);
             qh.reset();
-            if i != AsynchronousList::NUMBER_OF_BYTES - 1 {
-                qh.horizontal_link_pointer()
-                    .set_link_pointer(ret.address_of_index(i as u16 + 1));
-                qh.horizontal_link_pointer().set_terminate(false);
-            } else {
-                qh.horizontal_link_pointer()
-                    .set_link_pointer(ret.address_of_index(0));
-                qh.horizontal_link_pointer().set_terminate(false);
-            }
             if i == 0 {
-                qh.set_head_of_reclaimation_list_flag(true);
+                qh.set(QueueHeadBitPart::H, true);
             }
-            qh.horizontal_link_pointer().set_type(EhciCommonType0::QH);
+
+            if i != AsynchronousList::NUMBER_OF_ENTRIES - 1 {
+                /*
+                 *
+                 */
+                qh.chain_next_qh(ret.address_of_index(i as u16 + 1));
+            } else {
+                /* Original line was: qh.chain_next_qh(0)
+                 */
+                qh.chain_next_qh(ret.address_of_index(0));
+            }
         }
 
         return ret;
@@ -1557,9 +1422,13 @@ impl AsynchronousList {
         return self.base_address as u32 + (index as u32) * QueueHead::SIZE + inc;
     }
 
-    pub fn set(&self, ehci: &Ehci) {
-        ehci.usbbase
-            .asynclistaddr()
-            .set_address(self.address_of_index(0));
+    pub fn index_to_qh(&self, index: u16) -> QueueHead {
+        let inc: u32 = (16 * index as u32) * (index != 0) as u32;
+        let addr = self.base_address as u32 + (index as u32) * QueueHead::SIZE + inc;
+        return QueueHead::new(addr as u64);
+    }
+
+    pub fn set(&self, addr: &mut AsyncListAddr) {
+        addr.set_address(self.address_of_index(0));
     }
 }
