@@ -1,19 +1,36 @@
+use core::slice;
+
 use crate::{
     drivers::usb::{
         ehci::{
             Ehci, EhciInterruptPoller,
             configuration_parser::EhciDeviceConfiguration,
             data_structures::{
-                AsynchronousList, EhciCommonType0, EndpointSpeed, Mult, PidCode,
-                QueueElementTransferDescriptor, QueueHead,
+                AsynchronousList, EhciLinkType, EndpointSpeed, Mult, PidCode,
+                QueueElementTransferDescriptor, QueueHead, QueueHeadBitPart,
+                QueueHeadPart::{self, Eps, MaximumPacketLength, Type},
             },
-            registers::{Fladj, LineStatus, UsbBase},
-            structures::{endpoint::EhciEndpoint, interface::EhciInterface},
+            registers::{
+                Fladj,
+                HccParamsPart::Eecp,
+                HcsParamsPart::{self, NPorts},
+                LineStatus,
+                PortScBitPart::{self, ConnectStatusChange, CurrentConnectStatus},
+                PortScPart, UsbBase,
+                UsbCmdBitPart::{AsynchronousScheduleEnable, Rs},
+                UsbIntrBitPart::PortChangeInterruptEnable,
+                UsbStsBitPart::{self, HcHalted},
+            },
+            structures::{device::EhciDevice, endpoint::EhciEndpoint, interface::EhciInterface},
         },
-        independent::{CONFIGURATION_DESCRIPTOR_TYPE, DEVICE_DESCRIPTOR_TYPE, UsbControllerType},
+        independent::{
+            CONFIGURATION_DESCRIPTOR_TYPE, DEVICE_DESCRIPTOR_TYPE, UsbControllerType,
+            UsbDeviceState,
+        },
         standard_requests::UsbDeviceStandardRequest,
         traits::{
-            UsbController, UsbDevice, UsbEndpoint, UsbInterface, UsbInterruptPollerCallbackFn,
+            UsbConfiguration, UsbController, UsbDevice, UsbEndpoint, UsbInterface,
+            UsbInterruptPollerCallbackFn,
         },
     },
     fixed_vaddrs::{EHCI_BAR_FIXED_VADDR, ref_processor_mut},
@@ -89,34 +106,49 @@ impl UsbController for Ehci {
         );
         self.usbbase = UsbBase::new(bar0.get_address(), EHCI_BAR_FIXED_VADDR);
 
-        if self.usbbase.hccparams().eecp() >= 0x40 {
-            let eecp = self.usbbase.hccparams().eecp();
+        if self.usbbase.hccparams().get(Eecp) >= 0x40 {
+            let eecp = self.usbbase.hccparams().get(Eecp);
             let val = pci_bus.read_configuration_space_u32(pci_device, eecp as u16);
             pci_bus.write_configuration_space_u32(pci_device, eecp as u16, val | 1 << 24);
             sleep(200);
             pci_bus.write_configuration_space_u32(pci_device, eecp as u16 + 4, 0);
         }
         self.fladj = Fladj::new(unsafe { pci_bus.pci_base(pci_device).unwrap().add(0x61) } as u64);
-        self.devices = PageAllocator::new(
-            &mut self.memory_space,
-            self.usbbase.hcsparams().n_ports() as u32,
-        );
+        let ports = self.usbbase.hcsparams().get(HcsParamsPart::NPorts);
+        let device_memory = match self.memory_space.alloc_zero(1) {
+            Ok(mb) => mb,
+            Err(_e) => simple_kernel_panic(
+                self.module.name(),
+                "Could not allocate Memory for Device List\n",
+            ),
+        };
+        self.devices =
+            unsafe { slice::from_raw_parts_mut(device_memory.as_mut_ptr(), ports as usize) };
+        for (port_index, device) in self.devices.iter_mut().enumerate() {
+            *device = EhciDevice::new_detached(port_index as u8);
+        }
+        self.information.potential_device_count = ports as u16;
         self.initialize();
         sleep(100);
-        self.information.potential_device_count = self.usbbase.hcsparams().n_ports() as u16;
         return true;
     }
 
     fn gather_device_information(&mut self) -> bool {
-        for i in 0..self.devices.size() {
-            let device = self.devices.as_mut(i).unwrap();
+        for device in &mut *self.devices {
+            if let UsbDeviceState::Detached = device.state {
+                continue;
+            }
+
             let raw_descriptor = device.get_descriptor(DEVICE_DESCRIPTOR_TYPE, 0, Option::None, 18);
             let device_descriptor = raw_descriptor.as_device_descriptor();
 
             device
                 .default_control_endpoint
                 .get_designated_queue_head()
-                .set_maximum_packet_length(device_descriptor.b_max_packet_size0 as u16);
+                .set_part(
+                    MaximumPacketLength,
+                    device_descriptor.b_max_packet_size0 as u32,
+                );
             device
                 .default_control_endpoint
                 .update_max_packet_size(device_descriptor.b_max_packet_size0 as u16);
@@ -155,9 +187,11 @@ impl UsbController for Ehci {
         let mut endpoint_array: PageAllocator<EhciEndpoint> =
             PageAllocator::new(&mut self.memory_space, 64);
         let mut configurations: PageAllocator<EhciDeviceConfiguration> =
-            PageAllocator::new(&mut self.memory_space, 2);
-        for d in 0..self.devices.size() {
-            let device = self.devices.as_mut(d).unwrap();
+            PageAllocator::new(&mut self.memory_space, 16);
+        for device in &mut *self.devices {
+            if let UsbDeviceState::Detached = device.state {
+                continue;
+            }
             // fetches 9 bytes for wTotalLength first.
             let raw_descriptor0 =
                 device.get_descriptor(CONFIGURATION_DESCRIPTOR_TYPE, 0, Option::None, 9);
@@ -171,7 +205,12 @@ impl UsbController for Ehci {
                 Option::None,
                 configuration_descriptor0.w_total_length,
             );
-            device.configurations = configurations.as_mut_ptr(configurations.size()).unwrap();
+            device.configurations = unsafe {
+                slice::from_raw_parts_mut(
+                    configurations.as_mut_ptr(configurations.size()).unwrap(),
+                    1,
+                )
+            };
             device.num_configurations = 1; // this Implementation only supports 1 configuration
             configurations.push_back(EhciDeviceConfiguration::new(
                 &mut self.memory_space,
@@ -181,7 +220,6 @@ impl UsbController for Ehci {
                 configuration_descriptor0.b_num_interfaces as u16,
             ));
 
-            // TODO: Implement parser for this! + add EhciEndpoint trait
             match self
                 .memory_space
                 .free(&MemoryBlock::new(0x1000, raw_descriptor0.data as u64))
@@ -225,136 +263,126 @@ impl UsbController for Ehci {
         }
         self.data_packet_base = data_packet_base as u32;
         let mut allready_enabled = false;
-        for i in 0..self.usbbase.hcsparams().n_ports() {
+        /* Notice: on 'continue' device is initialized as Detached by initialize_controller*/
+        for i in 0..self.usbbase.hcsparams().get(NPorts) as u8 {
             let mut port = self.usbbase.portsc(i);
 
-            if !port.current_connect_status() || !port.connect_status_change() {
+            if !port.is_set(CurrentConnectStatus) || !port.is_set(ConnectStatusChange) {
                 continue;
             }
             // If the Port is not a high speed device -> hand of to Companion controller
-            if let LineStatus::K = port.line_status() {
-                port.set_port_owner(true);
+            if let LineStatus::K = LineStatus::new(port.get(PortScPart::LineStatus)) {
+                port.set(PortScBitPart::PortOwner, true);
                 continue;
             }
-            self.reset_port(i, self.data_packet_base);
+            if !self.reset_port(i, self.data_packet_base) {
+                continue;
+            }
             self.data_packet_base += 64;
-            *self
-                .devices
-                .as_mut(self.devices.size() - 1)
-                .unwrap()
+
+            *self.devices[i as usize]
                 .default_control_endpoint
-                .get_designated_queue_head() =
-                QueueHead::new(self.asynchronous_list.address_of_index(i as u16) as u64);
+                .get_designated_queue_head() = self
+                .asynchronous_list
+                .index_to_qh(self.information.active_device_count as u16);
 
             let mut current_qh = QueueHead::new(
-                self.devices
-                    .as_ref(self.devices.size() - 1)
-                    .unwrap()
+                self.devices[i as usize]
                     .default_control_endpoint
                     .get_designated_queue_head_address() as u64,
             );
             {
-                if i == 0 {
-                    current_qh.horizontal_link_pointer().set_terminate(true);
-                    current_qh.set_head_of_reclaimation_list_flag(true);
+                /*
+                 * This will set
+                 *  device address = 0
+                 *  endpoint number = 0
+                 *  inactive on next transaction = false
+                 *  data toggle control = false
+                 *  endpoint control flag = false
+                 *  Nak count reload = 0
+                 *  Mikro Frame S Mask = 0
+                 *  Mikro Frame C Mask = 0
+                 */
+                current_qh.reset();
+                if self.information.active_device_count == 0 {
+                    current_qh.set(QueueHeadBitPart::T, true);
+                    current_qh.set(QueueHeadBitPart::H, true);
                 }
-                current_qh
-                    .horizontal_link_pointer()
-                    .set_type(EhciCommonType0::QH);
+                current_qh.set_part(Type, EhciLinkType::Qh as u32);
+                current_qh.set_part(Eps, EndpointSpeed::HighSpeed as u32);
+                current_qh.set_part(MaximumPacketLength, 8);
+                current_qh.set_part(
+                    QueueHeadPart::Mult,
+                    Mult::OneTransactionPerMicroframe as u32,
+                );
                 current_qh.next_qtd_pointer().set_terminate(true);
-                current_qh.set_device_address(0);
-                current_qh.set_inactive_on_next_transaction(false);
-                current_qh.set_endpoint_number(0);
-                current_qh.set_endpoint_speed(EndpointSpeed::HighSpeed);
-                current_qh.set_data_toggle_control(false);
-                current_qh.set_maximum_packet_length(8);
-                current_qh.set_endpoint_control_flag(false);
-                current_qh.set_nak_count_reload(0);
-                current_qh.set_mult(Mult::OneTransactionPerMicroframe);
-                current_qh.set_frame_s_mask(0);
-                current_qh.set_frame_s_mask(0);
 
-                if i != 0 {
+                if self.information.active_device_count != 0 {
                     current_qh
-                        .horizontal_link_pointer()
-                        .set_link_pointer(self.asynchronous_list.address_of_index(0));
-                    current_qh.horizontal_link_pointer().set_terminate(false);
+                        .set_horizontal_link_pointer(self.asynchronous_list.address_of_index(0));
+                    current_qh.set(QueueHeadBitPart::T, false);
 
-                    self.devices
-                        .as_mut(self.devices.size() - 2)
-                        .unwrap()
-                        .default_control_endpoint
-                        .get_designated_queue_head()
-                        .horizontal_link_pointer()
-                        .set_link_pointer(current_qh.get_address());
-                    self.devices
-                        .as_mut(self.devices.size() - 2)
-                        .unwrap()
-                        .default_control_endpoint
-                        .get_designated_queue_head()
-                        .horizontal_link_pointer()
-                        .set_terminate(false);
+                    for j in i - 1..=0 {
+                        if let UsbDeviceState::Address = self.devices[j as usize].state {
+                            self.devices[j as usize]
+                                .default_control_endpoint
+                                .get_designated_queue_head()
+                                .chain_next_qh(current_qh.get_address());
+                            break;
+                        }
+                    }
                 }
             }
 
-            if i != 0 {
-                let current_endpoint_queue_head_address = self
-                    .devices
-                    .as_ref(self.devices.size() - 1)
-                    .unwrap()
+            if self.information.active_device_count != 0 {
+                let current_endpoint_queue_head_address = self.devices[i as usize]
                     .default_control_endpoint
                     .get_designated_queue_head_address();
 
-                let current_endpoint_queue_head =
+                let mut current_endpoint_queue_head =
                     QueueHead::new(current_endpoint_queue_head_address as u64);
 
-                let first_endpoint_queue_head_address = self
-                    .devices
-                    .as_ref(0)
-                    .unwrap()
-                    .default_control_endpoint
-                    .get_designated_queue_head_address();
+                let mut first_endpoint_queue_head_address = 0;
 
-                let last_endpoint_queue_head = QueueHead::new(
-                    self.devices
-                        .as_ref(i as u32 - 1)
-                        .unwrap()
-                        .default_control_endpoint
-                        .get_designated_queue_head_address() as u64,
-                );
+                for j in 0..i - 1 {
+                    if let UsbDeviceState::Address = self.devices[j as usize].state {
+                        first_endpoint_queue_head_address = self.devices[j as usize]
+                            .default_control_endpoint
+                            .get_designated_queue_head_address();
+                        break;
+                    }
+                }
+                assert_ne!(first_endpoint_queue_head_address, 0);
 
-                current_endpoint_queue_head
-                    .horizontal_link_pointer()
-                    .set_link_pointer(first_endpoint_queue_head_address);
-                current_endpoint_queue_head
-                    .horizontal_link_pointer()
-                    .set_type(EhciCommonType0::QH);
-                current_endpoint_queue_head
-                    .horizontal_link_pointer()
-                    .set_terminate(false);
-                last_endpoint_queue_head
-                    .horizontal_link_pointer()
-                    .set_link_pointer(current_endpoint_queue_head_address);
-                last_endpoint_queue_head
-                    .horizontal_link_pointer()
-                    .set_type(EhciCommonType0::QH);
-                last_endpoint_queue_head
-                    .horizontal_link_pointer()
-                    .set_terminate(false);
+                let mut last_endpoint_queue_head: QueueHead = QueueHead::new(0);
+
+                for j in i - 1..=0 {
+                    if let UsbDeviceState::Address = self.devices[j as usize].state {
+                        last_endpoint_queue_head = QueueHead::new(
+                            self.devices[j as usize]
+                                .default_control_endpoint
+                                .get_designated_queue_head_address()
+                                as u64,
+                        );
+                        break;
+                    }
+                }
+                assert_ne!(last_endpoint_queue_head.get_address(), 0);
+                current_endpoint_queue_head.chain_next_qh(first_endpoint_queue_head_address);
+                last_endpoint_queue_head.chain_next_qh(current_endpoint_queue_head_address);
             }
+            let mut current_device = &mut self.devices[i as usize];
             if !allready_enabled {
-                self.usbbase.usbcmd().set_asynchronous_schedule_enable(true);
+                self.usbbase.usbcmd().set(AsynchronousScheduleEnable, true);
                 allready_enabled = true;
             }
-            let device = self.devices.as_mut(self.devices.size() - 1).unwrap();
-            device.set_address(device.port_num as u16 + 1);
-            device.address = device.port_num + 1;
-            current_qh.set_device_address(device.address);
+            current_device.set_address(current_device.port_num as u16 + 1);
+            current_device.address = current_device.port_num + 1;
+            current_device.state = UsbDeviceState::Address;
+            current_qh.set_part(QueueHeadPart::DeviceAddress, current_device.address as u32);
+            self.information.active_device_count += 1;
         }
-        self.usbbase
-            .usbintr()
-            .set_port_change_interrupt_enable(true);
-        self.information.active_device_count = self.devices.size() as u16;
+        self.usbbase.usbintr().set(PortChangeInterruptEnable);
         Option::Some(true)
     }
     fn untraited_work1(&mut self) -> Option<bool> {
@@ -366,51 +394,53 @@ impl UsbController for Ehci {
         self.stop_async();
         let new_async_list = AsynchronousList::new(&mut self.memory_space);
 
-        for d in 0..self.devices.size() {
-            let device = self.devices.as_mut(d).unwrap();
-            // this is after reset.
-            let mut qh = QueueHead::new(new_async_list.address_of_index(d as u16) as u64);
-            qh.horizontal_link_pointer().set_type(EhciCommonType0::QH);
-            qh.horizontal_link_pointer()
-                .set_link_pointer(new_async_list.address_of_index(d as u16 + 1));
-            qh.horizontal_link_pointer().set_terminate(false);
-            qh.set_device_address(device.address);
-            qh.set_endpoint_speed(EndpointSpeed::HighSpeed);
-            if d == 0 {
-                qh.set_head_of_reclaimation_list_flag(true);
+        let mut device_inserted = 0u16;
+
+        for (device_index, device) in self.devices.iter_mut().enumerate() {
+            if let UsbDeviceState::Detached = device.state {
+                continue;
             }
-            qh.set_maximum_packet_length(device.default_control_endpoint.get_maximum_packet_size());
-            qh.set_mult(Mult::OneTransactionPerMicroframe);
+            // this is after reset.
+            let mut qh = new_async_list.index_to_qh(device_inserted);
+            if device_inserted == 0 {
+                qh.set(super::data_structures::QueueHeadBitPart::H, true);
+            }
+            qh.set_common_info(
+                EndpointSpeed::HighSpeed,
+                device.address,
+                device.default_control_endpoint.get_maximum_packet_size(),
+                0, // Since it´s the default control endpoint
+                Mult::OneTransactionPerMicroframe,
+            );
+
+            qh.chain_next_qh(new_async_list.address_of_index(device_inserted + 1));
             *device.default_control_endpoint.get_designated_queue_head() = qh;
+            device_inserted += 1;
         }
-        let mut index = self.devices.size() as u16;
+
+        let mut index = device_inserted;
         let mut last_address_written = 0;
-        for d in 0..self.devices.size() {
-            let device = self.devices.as_mut(d).unwrap();
-            for config in 0..device.num_configurations {
-                let configuration =
-                    unsafe { device.configurations.add(config as usize).as_ref().unwrap() };
-                for i in 0..device.device_information.num_interfaces {
-                    let interface = unsafe {
-                        configuration
-                            .get_interfaces()
-                            .add(i as usize)
-                            .as_ref()
-                            .unwrap()
-                    };
+        for device in &mut *self.devices {
+            if let UsbDeviceState::Detached = device.state {
+                continue;
+            }
+            for configuration in &mut *device.configurations {
+                for i in 0..configuration.get_interface_count() {
+                    let interface = configuration.get_mut_interface(i).unwrap();
                     for ep in 0..interface.endpoint_count() {
-                        let endpoint =
-                            unsafe { interface.get_endpoints().add(ep as usize).as_mut().unwrap() };
+                        let endpoint = unsafe {
+                            &mut *(interface.get_mut_endpoint(ep).unwrap() as *mut dyn UsbEndpoint
+                                as *mut EhciEndpoint)
+                        };
                         let mut qh = QueueHead::new(new_async_list.address_of_index(index) as u64);
-                        qh.set_endpoint_speed(EndpointSpeed::HighSpeed);
-                        qh.set_device_address(device.address);
-                        qh.set_maximum_packet_length(endpoint.get_maximum_packet_size());
-                        qh.horizontal_link_pointer().set_terminate(false);
-                        qh.horizontal_link_pointer().set_type(EhciCommonType0::QH);
-                        qh.horizontal_link_pointer()
-                            .set_link_pointer(new_async_list.address_of_index(index + 1));
-                        qh.set_mult(Mult::OneTransactionPerMicroframe);
-                        qh.set_endpoint_number(endpoint.endpoint_number());
+                        qh.set_common_info(
+                            EndpointSpeed::HighSpeed,
+                            device.address,
+                            endpoint.get_maximum_packet_size(),
+                            endpoint.endpoint_number(),
+                            Mult::OneTransactionPerMicroframe,
+                        );
+                        qh.chain_next_qh(new_async_list.address_of_index(index + 1));
                         *endpoint.get_designated_queue_head() = qh;
                         last_address_written = new_async_list.address_of_index(index) as u64;
                         index += 1;
@@ -418,10 +448,21 @@ impl UsbController for Ehci {
                 }
             }
         }
+
         // Constructs a round robin list
-        QueueHead::new(last_address_written)
-            .horizontal_link_pointer()
-            .set_link_pointer(new_async_list.address_of_index(0));
+
+        let mut first_addr = 0;
+
+        for device in &mut *self.devices {
+            if let UsbDeviceState::Address = device.state {
+                first_addr = device
+                    .default_control_endpoint
+                    .get_designated_queue_head_address();
+                break;
+            }
+        }
+        assert_ne!(first_addr, 0);
+        QueueHead::new(last_address_written).set_horizontal_link_pointer(first_addr);
         match self.memory_space.free(&MemoryBlock::new(
             0x1000,
             self.asynchronous_list.address_of_index(0) as u64,
@@ -430,33 +471,26 @@ impl UsbController for Ehci {
             Err(_e) => simple_kernel_panic("Ehci/update_async", "Could not free old async list\n"),
         };
         self.asynchronous_list = new_async_list;
-        self.asynchronous_list.set(self);
+        self.asynchronous_list
+            .set(&mut self.usbbase.asynclistaddr());
         self.start_async();
         self.start_periodic();
         Option::Some(true)
     }
 
     fn get_device(&self, index: u16) -> Option<&dyn crate::drivers::usb::traits::UsbDevice> {
-        if index > self.devices.size() as u16 {
+        if index > self.devices.len() as u16 {
             None
         } else {
-            unsafe {
-                let ptr = self.devices.as_ref_ptr(index as u32).unwrap();
-                let ret = &*ptr;
-                Some(ret)
-            }
+            return Some(&self.devices[index as usize]);
         }
     }
 
     fn get_mut_device(&mut self, index: u16) -> Option<&mut dyn UsbDevice> {
-        if index > self.devices.size() as u16 {
+        if index > self.devices.len() as u16 {
             None
         } else {
-            unsafe {
-                let ptr = self.devices.as_mut_ptr(index as u32).unwrap();
-                let ret = &mut *ptr;
-                Some(ret)
-            }
+            return Some(&mut self.devices[index as usize]);
         }
     }
 
@@ -506,13 +540,13 @@ impl UsbController for Ehci {
                 &qtds[0],
                 Mult::OneTransactionPerMicroframe,
             );
-            qh.set_frame_s_mask(1); // Tells the controller to interrupt at the 0th micro-Frame of the Frame.
+            qh.set_part(QueueHeadPart::MikroFrameSMask, 1); // Tells the controller to interrupt at the 0th micro-Frame of the Frame.
             qh.set_status_bit(7); // Activate
 
             let mut val = 0u16;
             while 1024 >= val + frame as u16 {
                 self.periodic_list
-                    .set_element(val, qh_address as u32, EhciCommonType0::QH);
+                    .set_element(val, qh_address as u32, EhciLinkType::Qh);
                 val += frame as u16;
             }
 
@@ -536,22 +570,22 @@ impl UsbController for Ehci {
      *  Software can only set Run/Stop to 1, if HCHalted is 1
      */
     fn start(&mut self) {
-        if self.usbbase.usbsts().hchalted() {
-            self.usbbase.usbcmd().set_rs(true);
+        if self.usbbase.usbsts().is_set(HcHalted) {
+            self.usbbase.usbcmd().set(Rs, true);
         }
         //Waits, until the Controller is running
-        while self.usbbase.usbsts().hchalted() {}
+        while self.usbbase.usbsts().is_set(HcHalted) {}
     }
 
     /**
      * Software can only set Run/Stop to 0, if HCHalted is 0
      */
     fn stop(&mut self) {
-        if !self.usbbase.usbsts().hchalted() {
-            self.usbbase.usbcmd().set_rs(false);
+        if !self.usbbase.usbsts().is_set(HcHalted) {
+            self.usbbase.usbcmd().set(Rs, false);
         }
         //Waits until the Controller is stopped
-        while !self.usbbase.usbsts().hchalted() {}
+        while !self.usbbase.usbsts().is_set(HcHalted) {}
     }
 
     fn error_present(&self) -> bool {
