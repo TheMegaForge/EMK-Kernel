@@ -1,23 +1,27 @@
 use core::ptr::null_mut;
 
-use crate::drivers::usb::{
-    ehci::structures::endpoint::EhciEndpoint,
-    traits::{UsbEndpoint, UsbInterface},
+use crate::{
+    drivers::usb::{
+        ehci::structures::endpoint::EhciEndpoint,
+        standard_requests::UsbInterfaceDescriptor,
+        traits::{UsbEndpoint, UsbInterface},
+    },
+    utils::invalid_mut_slice,
 };
 
 pub struct EhciInterface {
     num_endpoints: u8,
-    endpoints: *mut EhciEndpoint,
     interface_class: u8,
     interface_sub_class: u8,
     interface_protocol: u8,
     i_interface: u8,
+    endpoints: &'static mut [EhciEndpoint],
 }
 
 impl EhciInterface {
     pub fn new(
         num_endpoints: u8,
-        endpoints: *mut EhciEndpoint,
+        endpoints: &'static mut [EhciEndpoint],
         interface_class: u8,
         interface_sub_class: u8,
         interface_protocol: u8,
@@ -33,8 +37,15 @@ impl EhciInterface {
         };
     }
 
-    pub fn get_endpoints(&self) -> *mut EhciEndpoint {
-        return self.endpoints;
+    pub fn from_raw(r#in: &UsbInterfaceDescriptor, endpoints: &'static mut [EhciEndpoint]) -> Self {
+        return Self {
+            num_endpoints: r#in.b_num_endpoints,
+            endpoints: endpoints,
+            interface_class: r#in.b_interface_class,
+            interface_sub_class: r#in.b_interface_sub_class,
+            interface_protocol: r#in.b_interface_protocol,
+            i_interface: r#in.b_interface_protocol,
+        };
     }
 }
 
@@ -55,12 +66,13 @@ impl UsbInterface for EhciInterface {
         if index > self.num_endpoints as u16 {
             return Option::None;
         }
-
-        unsafe {
-            let ptr = self.endpoints.add(index as usize);
-            let ret = &*ptr;
-            return Option::Some(ret);
+        return Option::Some(&self.endpoints[index as usize]);
+    }
+    fn get_mut_endpoint(&mut self, index: u16) -> Option<&mut dyn UsbEndpoint> {
+        if index > self.num_endpoints as u16 {
+            return Option::None;
         }
+        return Option::Some(&mut self.endpoints[index as usize]);
     }
 }
 
@@ -68,7 +80,7 @@ impl Default for EhciInterface {
     fn default() -> Self {
         return Self {
             num_endpoints: 0,
-            endpoints: null_mut(),
+            endpoints: invalid_mut_slice(),
             interface_class: 0,
             interface_sub_class: 0,
             interface_protocol: 0,

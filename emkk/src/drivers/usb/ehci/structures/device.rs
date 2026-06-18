@@ -1,4 +1,4 @@
-use core::ptr::null_mut;
+use core::{ffi::c_void, ptr::null_mut};
 
 use crate::{
     drivers::usb::{
@@ -7,10 +7,12 @@ use crate::{
             data_structures::QueueHead, structures::endpoint::EhciEndpoint,
         },
         independent::{UsbDeviceInformation, UsbDeviceState},
+        ohci::structures::endpoint::EndpointDescriptorBitPart::S,
         standard_requests::UsbStandardDeviceRequest,
         traits::{UsbConfiguration, UsbDevice},
     },
     hal::{memory::allocator::Allocator, print::simple_kernel_panic},
+    utils::{invalid_mut_slice, invalid_slice},
 };
 
 pub struct EhciDevice {
@@ -21,7 +23,7 @@ pub struct EhciDevice {
     pub(in crate::drivers::usb::ehci) default_control_endpoint: EhciEndpoint,
     pub(in crate::drivers::usb::ehci) default_control_endpoint_setup_data_packet_base: u32,
     pub(in crate::drivers::usb::ehci) device_information: UsbDeviceInformation,
-    pub(in crate::drivers::usb::ehci) configurations: *const EhciDeviceConfiguration,
+    pub(in crate::drivers::usb::ehci) configurations: &'static mut [EhciDeviceConfiguration],
     pub(in crate::drivers::usb::ehci) num_configurations: u8,
 }
 
@@ -52,7 +54,21 @@ impl EhciDevice {
             ),
             default_control_endpoint_setup_data_packet_base,
             device_information: UsbDeviceInformation::empty(),
-            configurations: null_mut(),
+            configurations: invalid_mut_slice(),
+            num_configurations: 0,
+        };
+    }
+
+    pub fn new_detached(port_num: u8) -> Self {
+        return Self {
+            port_num,
+            num_endpoints: 0,
+            address: 0,
+            state: UsbDeviceState::Detached,
+            default_control_endpoint: EhciEndpoint::new(0, 0 as *mut c_void, 0, QueueHead::new(0)),
+            default_control_endpoint_setup_data_packet_base: 0,
+            device_information: UsbDeviceInformation::empty(),
+            configurations: invalid_mut_slice(),
             num_configurations: 0,
         };
     }
@@ -68,7 +84,7 @@ impl Default for EhciDevice {
             default_control_endpoint: EhciEndpoint::default(),
             default_control_endpoint_setup_data_packet_base: 0,
             device_information: UsbDeviceInformation::empty(),
-            configurations: null_mut(),
+            configurations: invalid_mut_slice(),
             num_configurations: 0,
         };
     }
@@ -118,10 +134,6 @@ impl UsbDevice for EhciDevice {
         if config > self.num_configurations {
             return Option::None;
         }
-        unsafe {
-            let ptr = self.configurations.add(config as usize);
-            let ret = &*ptr;
-            return Option::Some(ret);
-        }
+        return Option::Some(&self.configurations[config as usize]);
     }
 }

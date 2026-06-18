@@ -7,6 +7,8 @@ use crate::{
             data_structures::{PidCode, QueueElementTransferDescriptor, QueueHead},
         },
         independent::{Direction, UsbEndpointError, UsbTransferType},
+        ohci::structures::endpoint::EndpointDescriptorBitPart::S,
+        standard_requests::UsbEndpointDescriptor,
         traits::UsbEndpoint,
     },
     hal::print::simple_kernel_panic,
@@ -66,6 +68,27 @@ impl EhciEndpoint {
             designated_queue_head,
             setup_qtd_index: 0,
             endpoint_information: EhciEndpointInformation::default(),
+        };
+    }
+
+    pub fn full_new_from_raw(
+        endpoint_descriptor: &UsbEndpointDescriptor,
+        maximum_qtds: u16,
+        qtd_base: *mut c_void,
+        designated_queue_head: QueueHead,
+    ) -> Self {
+        return Self {
+            endpoint_index: endpoint_descriptor.b_endpoint_address & 0xF,
+            maximum_qtds,
+            qtd_base,
+            designated_queue_head,
+            setup_qtd_index: 0,
+            endpoint_information: EhciEndpointInformation {
+                endpoint_address: endpoint_descriptor.b_endpoint_address,
+                attributes: endpoint_descriptor.bm_attributes,
+                max_packet_size: endpoint_descriptor.w_max_packet_size,
+                interval: endpoint_descriptor.b_interval,
+            },
         };
     }
 
