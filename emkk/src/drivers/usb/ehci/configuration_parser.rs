@@ -11,7 +11,7 @@ use crate::{
             data_structures::QueueHead,
             structures::{endpoint::EhciEndpoint, interface::EhciInterface},
         },
-        independent::ENDPOINT_DESCRIPTOR_TYPE,
+        independent::UsbDescriptorType,
         standard_requests::{
             UsbDefaultDescriptor, UsbEndpointDescriptor, UsbHID, UsbHIDDescriptor,
             UsbInterfaceDescriptor,
@@ -22,7 +22,11 @@ use crate::{
         memory::allocator::{Allocator, MemoryBlock},
         print::simple_kernel_panic,
     },
-    utils::{allocators::PageAllocator, invalid_mut_slice, resize_slice, traits::Region},
+    utils::{
+        allocators::PageAllocator,
+        slices::{invalid_mut_slice, resize_slice},
+        traits::Region,
+    },
 };
 
 pub struct EhciDeviceConfiguration {
@@ -53,6 +57,9 @@ impl UsbConfiguration for EhciDeviceConfiguration {
     }
     fn get_interface_count(&self) -> u8 {
         return self.interfaces.len() as u8;
+    }
+    fn get_hid_interface_count(&self) -> u8 {
+        return self.hid_interfaces.len() as u8;
     }
 }
 
@@ -90,7 +97,7 @@ impl EhciDeviceConfiguration {
                 unsafe { (data as *const UsbInterfaceDescriptor).as_ref().unwrap() };
             data = unsafe { data.add(9) };
             let peeked_descriptor = unsafe { &*(data as *const UsbDefaultDescriptor) };
-            if peeked_descriptor.b_descriptor_type != ENDPOINT_DESCRIPTOR_TYPE {
+            if peeked_descriptor.b_descriptor_type != UsbDescriptorType::Endpoint as u8 {
                 data = unsafe {
                     data.add(ret.handle_special_descriptor(peeked_descriptor, i as u8) as usize)
                 };

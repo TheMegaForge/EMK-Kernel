@@ -1,4 +1,4 @@
-use core::{ffi::c_void, ptr::null_mut};
+use core::{ffi::c_void, ptr::null_mut, slice};
 
 use crate::{
     error,
@@ -211,6 +211,46 @@ pub struct MemoryBlock {
 impl MemoryBlock {
     pub const fn empty() -> Self {
         return Self { base: 0, length: 0 };
+    }
+    /** offset is in units of T*/
+    pub fn as_mut_slice<'a, T>(&self, offset: u64) -> &'a mut [T] {
+        unsafe {
+            slice::from_raw_parts_mut(
+                (self.base as *mut T).add(offset as usize),
+                (self.length as usize / size_of::<T>()) - offset as usize,
+            )
+        }
+    }
+    /** offset is in units of T*/
+    pub fn as_slice<'a, T>(&self, offset: u64) -> &'a [T] {
+        unsafe {
+            slice::from_raw_parts(
+                (self.base as *mut T).add(offset as usize),
+                (self.length as usize / size_of::<T>()) - offset as usize,
+            )
+        }
+    }
+
+    pub fn as_slice_limited<'a, T>(&self, offset: u64, length: u64) -> Option<&'a [T]> {
+        let total_length = self.length as usize / size_of::<T>();
+        if length > total_length as u64 - offset {
+            return Option::None;
+        }
+        Option::Some(unsafe {
+            slice::from_raw_parts(
+                (self.base as *const T).add(offset as usize),
+                length as usize,
+            )
+        })
+    }
+    pub fn as_mut_slice_limited<'a, T>(&self, offset: u64, length: u64) -> Option<&'a mut [T]> {
+        let total_length = self.length as usize / size_of::<T>();
+        if length > total_length as u64 - offset {
+            return Option::None;
+        }
+        Option::Some(unsafe {
+            slice::from_raw_parts_mut((self.base as *mut T).add(offset as usize), length as usize)
+        })
     }
 
     pub fn map(

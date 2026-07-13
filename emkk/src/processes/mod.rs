@@ -13,7 +13,7 @@ use crate::{
         loader::{ExecutableImage, ExecutableLoadError, load_executable_file},
         mark_table::MarkTable,
     },
-    utils::{buffer::Buffer, invalid_mut_slice, memory::memcpy_qword},
+    utils::{buffer::Buffer, memory::memcpy_qword, slices::invalid_mut_slice},
     vfs::gfs::{GFS, GFS_PERMISSIONS_EXECUTE, GfsResult, file::GfsFile},
 };
 

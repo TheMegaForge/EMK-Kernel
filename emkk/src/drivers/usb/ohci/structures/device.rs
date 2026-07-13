@@ -1,53 +1,167 @@
+use core::{ffi::c_void, ptr};
+
 use crate::drivers::usb::{
-    independent::UsbDeviceState,
-    standard_requests::UsbDeviceStandardRequest,
+    independent::{UsbDeviceInformation, UsbDeviceState, UsbTransferType},
+    ohci::{
+        configuration_parser::OhciDeviceConfiguration,
+        structures::{
+            endpoint::{
+                EndpointDescriptorBitPart, OhciEndpointDescriptor, OhciNonPeriodicEndpoint,
+            },
+            non_periodic_list::OhciNonPeriodicList,
+        },
+    },
+    standard_requests::{UsbDescriptor, UsbDeviceStandardRequest, UsbStandardDeviceRequest},
     traits::{UsbDevice, UsbDeviceExtendedRequest},
 };
 
 pub struct OhciDevice {
-    device_address: u8,
+    pub(in crate::drivers::usb::ohci) device_address: u8,
     port: u8,
     class_code: u8,
     sub_class_code: u8,
-    state: UsbDeviceState,
-    control_list_ep_index: u8,
+    pub(in crate::drivers::usb::ohci) state: UsbDeviceState,
+    pub(in crate::drivers::usb::ohci) control_ep: OhciNonPeriodicEndpoint,
+    control_list: &'static OhciNonPeriodicList,
+    signaled: bool,
+    pub(in crate::drivers::usb::ohci) device_information: UsbDeviceInformation,
+    pub(in crate::drivers::usb::ohci) configuration: OhciDeviceConfiguration,
 }
 
 impl OhciDevice {
-    pub fn new_resetted(port: u8, control_list_ep_index: u8) -> Self {
+    pub fn new_resetted(
+        port: u8,
+        control_ep: OhciEndpointDescriptor,
+        control_list: &'static OhciNonPeriodicList,
+    ) -> Self {
         return Self {
             device_address: 0,
             port,
             class_code: 0,
             sub_class_code: 0,
             state: UsbDeviceState::Resetted,
-            control_list_ep_index,
+            control_ep: OhciNonPeriodicEndpoint::new(UsbTransferType::Control, control_ep),
+            control_list,
+            signaled: false,
+            device_information: UsbDeviceInformation {
+                device_class: 0,
+                device_sub_class: 0,
+                device_protocol: 0,
+                vendor_id: 0,
+                product_id: 0,
+                manufacturer: 0,
+                i_product: 0,
+                serial_number: 0,
+                max_power_ma: 0,
+                num_interfaces: 0,
+            },
+            configuration: OhciDeviceConfiguration::empty(),
         };
     }
-    pub fn new_detached(port: u8, control_list_ep_index: u8) -> Self {
+    /**NOTICE: This is kinda illegal, since it could be that a &mut OhciDevice modifies another &mut OhciDevice reference*/
+    pub fn signal(&mut self) {
+        self.signaled = true;
+    }
+
+    pub fn new_detached(
+        port: u8,
+        control_ep: OhciEndpointDescriptor,
+        control_list: &'static OhciNonPeriodicList,
+    ) -> Self {
         return Self {
             device_address: 0,
             port,
             class_code: 0,
             sub_class_code: 0,
             state: UsbDeviceState::Detached,
-            control_list_ep_index,
+            control_ep: OhciNonPeriodicEndpoint::new(UsbTransferType::Control, control_ep),
+            control_list,
+            signaled: false,
+            device_information: UsbDeviceInformation {
+                device_class: 0,
+                device_sub_class: 0,
+                device_protocol: 0,
+                vendor_id: 0,
+                product_id: 0,
+                manufacturer: 0,
+                i_product: 0,
+                serial_number: 0,
+                max_power_ma: 0,
+                num_interfaces: 0,
+            },
+            configuration: OhciDeviceConfiguration::empty(),
         };
+    }
+
+    pub fn control_without_data(&mut self, request: &UsbStandardDeviceRequest) {
+        self.control_ep.send_setup_status(
+            0,
+            ptr::from_ref(request) as u32,
+            UsbStandardDeviceRequest::SIZE,
+            0,
+            1,
+            true,
+        );
+        self.control_list.send_for_processing();
+    }
+
+    pub fn control_with_data_to_host(
+        &mut self,
+        request: &UsbStandardDeviceRequest,
+        data_ptr: u32,
+        data_length: u32,
+        exact_fit: bool,
+    ) {
+        assert_ne!(data_length, 0);
+        self.control_ep.send_setup_status(
+            0,
+            ptr::from_ref(request) as u32,
+            UsbStandardDeviceRequest::SIZE,
+            data_ptr,
+            data_length,
+            exact_fit,
+        );
+        self.control_list.send_for_processing();
+    }
+
+    pub fn control_with_data_from_host(
+        &mut self,
+        request: &UsbStandardDeviceRequest,
+        data_ptr: u32,
+        data_length: u32,
+        exact_fit: bool,
+    ) {
+        assert_ne!(data_length, 0);
+        self.control_ep.send_setup_out_status(
+            0,
+            ptr::from_ref(request) as u32,
+            UsbStandardDeviceRequest::SIZE,
+            data_ptr,
+            data_length,
+            exact_fit,
+        );
+        self.control_list.send_for_processing();
+    }
+
+    pub fn await_interrupt(&mut self) {
+        while !self.signaled {}
+        self.signaled = false;
     }
 }
 
 impl UsbDevice for OhciDevice {
-    fn await_interrupt(&self) {
-        todo!()
-    }
     fn detach(&mut self) {
+        self.state = UsbDeviceState::Detached;
+        self.control_ep
+            .get_endpoint_descriptor()
+            .set(EndpointDescriptorBitPart::K, true);
+        self.control_ep
+            .get_endpoint_descriptor()
+            .set(EndpointDescriptorBitPart::Dum, true);
         todo!()
     }
     fn device_address(&self) -> u8 {
         return self.device_address;
-    }
-    fn endpoint_count(&self) -> u8 {
-        todo!()
     }
     fn get_class_code(&self) -> u8 {
         return self.class_code;
@@ -56,10 +170,22 @@ impl UsbDevice for OhciDevice {
         &self,
         config: u8,
     ) -> Option<&dyn crate::drivers::usb::traits::UsbConfiguration> {
-        todo!()
+        if config != 0 {
+            return Option::None;
+        }
+        return Option::Some(&self.configuration);
+    }
+    fn get_mut_configuration(
+        &mut self,
+        config: u8,
+    ) -> Option<&mut dyn crate::drivers::usb::traits::UsbConfiguration> {
+        if config != 0 {
+            return Option::None;
+        }
+        return Option::Some(&mut self.configuration);
     }
     fn get_configuration_count(&self) -> u8 {
-        todo!()
+        return 1;
     }
     fn get_port(&self) -> u8 {
         return self.port;
@@ -69,90 +195,5 @@ impl UsbDevice for OhciDevice {
     }
     fn get_sub_class_code(&self) -> u8 {
         return self.sub_class_code;
-    }
-    fn request_packet_address<'a>(
-        &'a self,
-    ) -> &'a mut crate::drivers::usb::standard_requests::UsbStandardDeviceRequest {
-        todo!()
-    }
-}
-
-impl UsbDeviceStandardRequest for OhciDevice {
-    fn clear_feature(
-        &mut self,
-        feature_selector: u16,
-        recipient: crate::drivers::usb::independent::UsbRecipient,
-    ) {
-        todo!()
-    }
-    fn get_configuratuion(&mut self) -> crate::drivers::usb::independent::UsbDeviceConfiguration {
-        todo!()
-    }
-    fn get_descriptor(
-        &mut self,
-        descriptor_type: u8,
-        descriptor_index: u8,
-        language_id: Option<u16>,
-        descriptor_length: u16,
-    ) -> crate::drivers::usb::standard_requests::UsbDescriptor {
-        todo!()
-    }
-    fn get_interface(
-        &mut self,
-        interface: u16,
-    ) -> crate::drivers::usb::independent::UsbInterfaceAlternateSetting {
-        todo!()
-    }
-    fn get_status(
-        &mut self,
-        recipient: crate::drivers::usb::independent::UsbRecipient,
-    ) -> crate::drivers::usb::independent::UsbGeneralStatus {
-        todo!()
-    }
-    fn set_address(&mut self, device_address: u16) {
-        todo!()
-    }
-    fn set_configuration(
-        &mut self,
-        configuration: crate::drivers::usb::independent::UsbDeviceConfiguration,
-    ) {
-        todo!()
-    }
-    fn set_descriptor(
-        &mut self,
-        descriptor_type: u8,
-        descriptor_index: u8,
-        language_id: Option<u16>,
-        descriptor_length: u16,
-        in_descriptor: &crate::drivers::usb::standard_requests::UsbDescriptor,
-    ) {
-        todo!()
-    }
-    fn set_feature(
-        &mut self,
-        feature_selector: u16,
-        test_selector: u8,
-        recipient: crate::drivers::usb::independent::UsbRecipient,
-    ) {
-        todo!()
-    }
-    fn set_interface(
-        &mut self,
-        alternate_setting: crate::drivers::usb::independent::UsbInterfaceAlternateSetting,
-        interface: u16,
-    ) {
-        todo!()
-    }
-    fn synch_frame(
-        &mut self,
-        endpoint: u16,
-    ) -> crate::drivers::usb::independent::UsbEndpointFrameNumber {
-        todo!()
-    }
-}
-
-impl UsbDeviceExtendedRequest for OhciDevice {
-    fn set_protocol(&mut self, request: u8, interface: u16) {
-        todo!()
     }
 }

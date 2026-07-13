@@ -12,7 +12,7 @@ use crate::{
         traits::{UsbConfiguration, UsbDevice},
     },
     hal::{memory::allocator::Allocator, print::simple_kernel_panic},
-    utils::{invalid_mut_slice, invalid_slice},
+    utils::slices::invalid_mut_slice,
 };
 
 pub struct EhciDevice {
@@ -72,6 +72,19 @@ impl EhciDevice {
             num_configurations: 0,
         };
     }
+
+    pub fn request_packet_address<'a>(&'a self) -> &'a mut UsbStandardDeviceRequest {
+        return unsafe {
+            (self.default_control_endpoint_setup_data_packet_base as *mut UsbStandardDeviceRequest)
+                .as_mut()
+                .unwrap()
+        };
+    }
+
+    pub fn await_interrupt(&self) {
+        while unsafe { !EHCI_CONTROLLER.endpoint_interrupted } {}
+        unsafe { EHCI_CONTROLLER.endpoint_interrupted = false };
+    }
 }
 
 impl Default for EhciDevice {
@@ -91,11 +104,6 @@ impl Default for EhciDevice {
 }
 
 impl UsbDevice for EhciDevice {
-    fn await_interrupt(&self) {
-        while unsafe { !EHCI_CONTROLLER.endpoint_interrupted } {}
-        unsafe { EHCI_CONTROLLER.endpoint_interrupted = false };
-    }
-
     fn detach(&mut self) {
         self.state = UsbDeviceState::Detached;
         self.port_num = 0xFF;
@@ -114,18 +122,8 @@ impl UsbDevice for EhciDevice {
     fn get_state(&self) -> UsbDeviceState {
         return self.state;
     }
-    fn endpoint_count(&self) -> u8 {
-        return self.num_endpoints;
-    }
     fn device_address(&self) -> u8 {
         return self.address;
-    }
-    fn request_packet_address<'a>(&'a self) -> &'a mut UsbStandardDeviceRequest {
-        return unsafe {
-            (self.default_control_endpoint_setup_data_packet_base as *mut UsbStandardDeviceRequest)
-                .as_mut()
-                .unwrap()
-        };
     }
     fn get_configuration_count(&self) -> u8 {
         return self.num_configurations;
@@ -135,5 +133,11 @@ impl UsbDevice for EhciDevice {
             return Option::None;
         }
         return Option::Some(&self.configurations[config as usize]);
+    }
+    fn get_mut_configuration(&mut self, config: u8) -> Option<&mut dyn UsbConfiguration> {
+        if config > self.num_configurations {
+            return Option::None;
+        }
+        return Option::Some(&mut self.configurations[config as usize]);
     }
 }

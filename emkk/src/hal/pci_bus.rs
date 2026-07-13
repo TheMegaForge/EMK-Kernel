@@ -327,6 +327,16 @@ impl PciBus {
             *command = *command & !(1 << 10);
         }
     }
+    pub fn enable_io_space(&self, pci_device: u64) {
+        let base = match self.pci_base(pci_device) {
+            Some(base) => base,
+            None => simple_kernel_panic("PciBus/enable_interrupts", "Unknown device\n"),
+        };
+        let command = unsafe { base.add(4) } as *mut u16;
+        unsafe {
+            *command = *command | 1;
+        }
+    }
 
     pub fn initialize(&mut self, system_table: &mut SystemTable) {
         let mut module: Module<'static> = Module::new("Pci Bus");
@@ -486,6 +496,18 @@ impl PciBus {
         };
         unsafe { base = base.add(offset as usize) };
         return unsafe { (base as *mut u32).read_volatile() };
+    }
+
+    pub fn read_configuration_space_u8(&self, pci_device: u64, offset: u16) -> u8 {
+        let mut base = match self.pci_base(pci_device) {
+            Some(base) => base,
+            None => simple_kernel_panic(
+                "PciBus/write_configuration_space_u8",
+                "Invalid pci_device\n",
+            ),
+        };
+        unsafe { base = base.add(offset as usize) };
+        return unsafe { (base as *mut u8).read_volatile() };
     }
 
     pub fn new(system_table: &mut SystemTable) -> Self {

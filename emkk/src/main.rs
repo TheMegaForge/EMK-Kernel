@@ -16,7 +16,7 @@ use crate::{
         print::{GopFramebuffer, Module, simple_kernel_panic, switch_framebuffer_location},
     },
     time::sleep,
-    utils::intrin::rdmsr,
+    utils::rdmsr,
 };
 use core::{error, ffi::c_void, panic::PanicInfo};
 

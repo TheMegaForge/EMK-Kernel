@@ -42,7 +42,7 @@ impl OhciNonPeriodicList {
         };
     }
     #[inline(always)]
-    fn ep(&self, index: u8) -> OhciEndpointDescriptor {
+    pub fn ep(&self, index: u8) -> OhciEndpointDescriptor {
         return OhciEndpointDescriptor::new(unsafe {
             self.endpoint_memory
                 .as_mut_ptr::<c_void>()
@@ -50,7 +50,7 @@ impl OhciNonPeriodicList {
         });
     }
 
-    pub fn append_endpoint(&mut self, endpoint: OhciEndpointDescriptor) {
+    pub fn append_endpoint(&mut self, endpoint: OhciEndpointDescriptor) -> u8 {
         let mut ep = self.ep(self.current_endpoint_index);
         ep.copy_from(&endpoint);
         if self.current_endpoint_index != 0 {
@@ -64,6 +64,7 @@ impl OhciNonPeriodicList {
                 "Endpoint Count exhausted\n",
             )
         }
+        return self.current_endpoint_index - 1;
     }
     /**
      * This will update *self.head, and set the specified fill bit

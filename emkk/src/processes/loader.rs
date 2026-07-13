@@ -20,7 +20,7 @@ use crate::{
         launch_application,
         pe::{get_nt_dll_name, load_pe_executable},
     },
-    utils::{buffer::Buffer, invalid_mut_slice, invalid_slice, traits::Region},
+    utils::{buffer::Buffer, slices::invalid_slice, traits::Region},
     vfs::gfs::{GFS, GfsType, file::GfsFile},
 };
 

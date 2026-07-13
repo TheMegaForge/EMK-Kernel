@@ -12,7 +12,7 @@ use crate::{
                 HccParamsPart, UsbBase, UsbCmdPart,
             },
         },
-        independent::Direction,
+        independent::{Direction, PidCode},
         ohci::structures::device,
     },
     hal::{memory::allocator::Allocator, print::simple_kernel_panic},
@@ -421,7 +421,7 @@ impl IsochronousTransferDescriptorBuffer {
 
     #[inline(always)]
     pub fn set_direction(&mut self, direction: Direction) {
-        unsafe { *self.address = (*self.address & !(1 << 11)) | direction.as_u32() << 11 }
+        unsafe { *self.address = (*self.address & !(1 << 11)) | direction.as_ehci() << 11 }
     }
 
     #[inline(always)]
@@ -817,38 +817,6 @@ impl qTDPointer {
         }
     }
 }
-
-pub enum PidCode {
-    OutToken,
-    InToken,
-    SetupToken,
-}
-
-impl PidCode {
-    pub fn from_raw(val: u32) -> Self {
-        return match val {
-            0 => Self::OutToken,
-            1 => Self::InToken,
-            2 => Self::SetupToken,
-            _ => simple_kernel_panic("PidCode/from_raw", "Invalid val\n"),
-        };
-    }
-    pub fn as_u32(&self) -> u32 {
-        return match self {
-            Self::OutToken => 0,
-            Self::InToken => 1,
-            Self::SetupToken => 2,
-        };
-    }
-    // true  => In
-    // false => Out
-    pub fn inout_from_bool(val: bool) -> Self {
-        return match val {
-            true => Self::InToken,
-            false => Self::OutToken,
-        };
-    }
-}
 pub const PID_CODE_MASK: u32 = 0b11 << 8;
 pub const TOTAL_BYTES_TO_TRANSFER_MASK: u32 = (1 << ((30 - 16) + 1)) - 1;
 pub const C_PAGE_MASK: u32 = 0b111;
@@ -916,7 +884,7 @@ impl QueueElementTransferDescriptor {
     }
     #[inline(always)]
     pub fn pid_code(&self) -> PidCode {
-        return PidCode::from_raw((unsafe { *self.address.add(2) >> 8 } & 0b11));
+        return PidCode::from_ehci((unsafe { *self.address.add(2) >> 8 } & 0b11));
     }
     #[inline(always)]
     pub fn error_counter(&self) -> u8 {
@@ -969,7 +937,7 @@ impl QueueElementTransferDescriptor {
         unsafe {
             self.address
                 .add(2)
-                .write((self.address.add(2).read() & (!PID_CODE_MASK)) | pid_code.as_u32() << 8);
+                .write((self.address.add(2).read() & (!PID_CODE_MASK)) | pid_code.as_ehci() << 8);
         }
     }
     #[inline(always)]

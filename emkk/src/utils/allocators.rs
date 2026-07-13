@@ -110,6 +110,13 @@ impl<T> PageAllocator<T> {
         return unsafe { self.ptr.add(index as usize).as_ref() };
     }
 
+    pub fn as_mut_juked_static(&self, index: u32) -> Option<&'static mut T> {
+        if index >= self.allocated {
+            return Option::None;
+        }
+        return unsafe { self.ptr.add(index as usize).as_mut() };
+    }
+
     pub fn as_mut(&mut self, index: u32) -> Option<&mut T> {
         if index > self.allocated {
             return Option::None;
@@ -129,6 +136,32 @@ impl<T> PageAllocator<T> {
             return Option::None;
         }
         return Option::Some(unsafe { self.ptr.add(index as usize) });
+    }
+
+    pub fn whole_as_mut_slice<'a>(&self, offset: u32) -> Option<&'a mut [T]> {
+        if offset >= self.capacity {
+            return Option::None;
+        }
+        let base = unsafe { self.ptr.add(offset as usize) };
+        return unsafe {
+            Option::Some(slice::from_raw_parts_mut(
+                base,
+                self.capacity as usize - offset as usize,
+            ))
+        };
+    }
+
+    pub fn whole_as_slice<'a>(&self, offset: u32) -> Option<&'a [T]> {
+        if offset >= self.capacity {
+            return Option::None;
+        }
+        let base = unsafe { self.ptr.add(offset as usize) };
+        return unsafe {
+            Option::Some(slice::from_raw_parts(
+                base,
+                self.capacity as usize - offset as usize,
+            ))
+        };
     }
 
     pub fn size(&self) -> u32 {

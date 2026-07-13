@@ -13,7 +13,7 @@ use crate::{
         print::simple_kernel_panic,
     },
     multithreading::processors::Processor,
-    utils::{allocators::NodeAllocator, resize_slice, traits::Region},
+    utils::{allocators::NodeAllocator, slices::resize_slice, traits::Region},
 };
 #[repr(align(8))]
 pub struct MarkTableBucket {

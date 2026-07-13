@@ -31,7 +31,7 @@ use crate::{
     info,
     multithreading::processors::Processor,
     time::sleep,
-    utils::{allocators::PageAllocator, invalid_mut_slice, list::List, queue::Queue},
+    utils::{allocators::PageAllocator, list::List, queue::Queue, slices::invalid_mut_slice},
     warn,
 };
 
@@ -47,9 +47,8 @@ pub struct EhciInterruptPoller {
 pub mod configuration_parser;
 pub mod data_structures;
 pub mod ehc_controller_impl;
-pub mod extended_request_impl;
 pub mod registers;
-pub mod standard_request_impl;
+pub mod request_impl;
 pub mod structures;
 #[repr(align(16))]
 pub struct Ehci {
@@ -71,6 +70,8 @@ pub struct Ehci {
     interrupt_pollers_designated_qhs: PageAllocator<QueueHead>,
     interrupt_pollers_qhs: *mut c_void,
     interrupt_pollers_qtds: *mut c_void,
+    /** Indicates that no device is connected*/
+    dummy: bool,
 }
 
 // TODO: Implement proper handler
@@ -231,6 +232,7 @@ impl Ehci {
             interrupt_pollers_qtds: null_mut(),
             interrupt_pollers: PageAllocator::empty(),
             interrupt_pollers_designated_qhs: PageAllocator::empty(),
+            dummy: false,
         };
     }
 

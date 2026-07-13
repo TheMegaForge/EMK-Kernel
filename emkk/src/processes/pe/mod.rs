@@ -7,12 +7,9 @@ use core::{
 use crate::{
     arch::{gdt::get_gdt_base, interrupts::get_idt_base},
     fixed_vaddrs::{LOADER_RESOURCES_FIXED_VADDR, PE32_PLUS_STACK_ADDRESS_FIXED_VADDR},
-    hal::{
-        memory::{
-            allocator::{Allocator, MemoryBlock, VirtualAllocator},
-            pager::{PAGER_2MIB, PAGER_PCD, PAGER_PRESENT, PAGER_RW, PAGER_US, Pager},
-        },
-        pci_bus::BarType::Memory,
+    hal::memory::{
+        allocator::{Allocator, MemoryBlock, VirtualAllocator},
+        pager::{PAGER_2MIB, PAGER_PCD, PAGER_PRESENT, PAGER_RW, PAGER_US, Pager},
     },
     processes::{
         launch_application,
@@ -567,9 +564,9 @@ impl<'b> PeCoff<'b> {
             header.virtual_address - import_directory_table_section.virtual_address;
 
         let import_directory_table = unsafe {
-            ((buffer.address()
+            (buffer.address()
                 + import_directory_table_section.pointer_to_raw_data as u64
-                + import_directory_table_offset as u64) as *const ImportDirectoryTable)
+                + import_directory_table_offset as u64) as *const ImportDirectoryTable
         };
 
         let mut length = 0;
@@ -872,8 +869,8 @@ impl<'b> PeCoff<'b> {
             Some(section) => section,
             None => return Result::Err(ExecutableLoadError::Malformed),
         };
-        let export_address_table_offset = (export_directory_table.export_address_table_pointer_rva
-            - export_address_table_section.virtual_address);
+        let export_address_table_offset = export_directory_table.export_address_table_pointer_rva
+            - export_address_table_section.virtual_address;
 
         let ordinal_table_section =
             match self.find_section_for_rva(export_directory_table.ordinal_table_rva) {
@@ -895,11 +892,11 @@ impl<'b> PeCoff<'b> {
             Some(section) => section,
             None => return Result::Err(ExecutableLoadError::Malformed),
         };
-        let name_offset = (export_directory_table.name_rva - name_section.virtual_address);
+        let name_offset = export_directory_table.name_rva - name_section.virtual_address;
 
-        let name_ptr: *const u8 = ((buffer.address()
+        let name_ptr: *const u8 = (buffer.address()
             + name_section.pointer_to_raw_data as u64
-            + name_offset as u64) as *const u8);
+            + name_offset as u64) as *const u8;
 
         let export_address_table = unsafe {
             slice::from_raw_parts(

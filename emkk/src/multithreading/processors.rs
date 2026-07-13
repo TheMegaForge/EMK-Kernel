@@ -25,12 +25,7 @@ use crate::{
     multithreading::{local_apic_spurious_interrupt, per_processor_function::kernel_ipi_dst},
     processes::{ApplicationComplex, IpiDescriptorPacket},
     success,
-    utils::{
-        cpuid,
-        intrin::{get_cr3, rdmsr, wrmsr},
-        memory::memset_qword,
-        traits::Region,
-    },
+    utils::{cpuid, get_cr3, memory::memset_qword, rdmsr, traits::Region, wrmsr},
 };
 
 // is allways paged to an specific address

@@ -6,7 +6,7 @@ use crate::{
         standard_requests::UsbInterfaceDescriptor,
         traits::{UsbEndpoint, UsbInterface},
     },
-    utils::invalid_mut_slice,
+    utils::slices::invalid_mut_slice,
 };
 
 pub struct EhciInterface {

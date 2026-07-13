@@ -9,11 +9,7 @@ use crate::{
     multithreading::processors::Processor,
     processes::ExecutionMode,
     success,
-    utils::{
-        intrin::{set_cr3, wrmsr},
-        memory::MemoryResult,
-        traits::Region,
-    },
+    utils::{memory::MemoryResult, set_cr3, traits::Region, wrmsr},
 };
 use core::{ffi::c_void, ptr::null_mut};
 
@@ -580,7 +576,7 @@ impl Pager {
         physical_allocator: &mut Allocator,
     ) -> Option<MemoryResult> {
         for pdpi in 0..512 {
-            let mut pdpt = PointerTable::new(PointerTableType::PDPT, other.cr3, pdpi, unsafe {
+            let pdpt = PointerTable::new(PointerTableType::PDPT, other.cr3, pdpi, unsafe {
                 (*other.cr3.add(pdpi as usize)) & 0xFFF
             }
                 as u16);

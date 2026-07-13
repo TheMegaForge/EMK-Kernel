@@ -7,6 +7,52 @@
 [global set_cr3]
 [global popcount]
 
+[global inb]
+[global inw]
+[global ind]
+[global outb]
+[global outw]
+[global outd]
+inb:
+    push rdx
+    mov dx, di
+    in al,dx
+    pop rdx
+    ret
+inw:
+    push rdx
+    mov dx, di
+    in ax, dx
+    pop rdx
+    ret
+ind:
+    push rdx
+    mov dx, di
+    in eax, dx
+    pop rdx
+    ret
+outb:
+    push rdx
+    mov dx, di
+    mov al, sil
+    out dx, al
+    pop rdx
+    ret
+outw:
+    push rdx
+    mov dx, di
+    mov ax, si
+    out dx, ax
+    pop rdx
+    ret
+outd:
+    push rdx
+    mov dx, di
+    mov eax, esi
+    out dx, eax
+    pop rdx
+    ret
+
 ;rdi = ptr
 load_gdt:
    lgdt [rdi]

@@ -659,8 +659,7 @@ impl Keyboard {
     #[allow(static_mut_refs)]
     fn usb_report(_usb_controller: &dyn UsbController) {
         /*
-        let mut module = Module::new("usb_report");
-
+            let mut module = Module::new("usb_report");
         unsafe {
             info!(
                 &mut module,
@@ -671,8 +670,7 @@ impl Keyboard {
                 *(SCANCODE_BUFFER.add(4)),
                 *(SCANCODE_BUFFER.add(5))
             );
-        }
-        */
+        }*/
         unsafe {
             let scancode_buffer = SCANCODE_BUFFER;
 
@@ -832,12 +830,12 @@ impl Keyboard {
     }
 
     pub fn new_usb(
-        virtual_allocator: &mut Allocator,
+        physical_allocator: &mut Allocator,
         controller: &mut dyn UsbController,
         usb_device: &mut dyn UsbDevice,
         usb_hid: &UsbHID,
     ) -> Self {
-        let scancode_buffer: *const u8 = match virtual_allocator.alloc_zero(1) {
+        let scancode_buffer: *const u8 = match physical_allocator.alloc_zero(1) {
             Ok(mb) => mb.as_mut_ptr(),
             Err(_e) => {
                 simple_kernel_panic("Keyboard/new_usb", "Could not allocate scancode buffer\n")
@@ -859,21 +857,20 @@ impl Keyboard {
         {
             simple_kernel_panic("Keyboard/new_usb", "Boot Protocol is not supported\n");
         }
-        usb_device.set_protocol(0xB, BOOT_PROTOCOL);
+        usb_device.set_protocol(0xB, BOOT_PROTOCOL, 0);
 
         let interface = usb_device
             .get_configuration(0)
             .unwrap()
             .get_interface(0)
             .unwrap();
-
         let endpoint = interface.get_endpoint(0).unwrap();
-        let interval_in_frames =
-            endpoint.calculate_interval_micro_frames() / USB_MICRO_FRAME_TO_FRAME_CONVERSION_FACTOR;
+        let interval_in_ms = endpoint.get_interval_in_ms();
         controller.install_interrupt_poller(
             usb_device,
-            endpoint,
-            interval_in_frames as u8,
+            0,
+            0,
+            interval_in_ms as u8,
             scancode_buffer as u32,
             8,
             Option::Some(Keyboard::usb_report),

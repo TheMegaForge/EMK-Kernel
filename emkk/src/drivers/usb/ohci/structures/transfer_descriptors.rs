@@ -1,23 +1,40 @@
 pub struct GeneralTD {
     val: *mut u32,
 }
+#[repr(C)]
+pub struct RawGeneralTD {
+    _dword0: u32,
+    _dword1: u32,
+    _dword2: u32,
+    _dword3: u32,
+}
 
 #[repr(u32)]
 pub enum GeneralTDPart {
+    /** Direction/PID */
     Dp = (0x3 << 10) | (19 << 4) | 0,
+    /** DelayInterrupt*/
     Di = (0x7 << 10) | (21 << 4) | 0,
+    /** DataToggle*/
     T = (0x3 << 10) | (24 << 4) | 0,
+    /** ErrorCount*/
     Ec = (0x3 << 10) | (26 << 4) | 0,
+    /** ConditionCode */
     Cc = (0xF << 10) | (28 << 4) | 0,
 }
 #[repr(u32)]
 pub enum GeneralTDBitPart {
+    /** bufferRounding*/
     R = (18 << 16) | 0,
 }
 
 impl GeneralTD {
     pub fn new(val: *mut u32) -> Self {
         return Self { val };
+    }
+
+    pub fn address(&self) -> u32 {
+        return self.val as u32;
     }
 
     pub fn zero_out(&mut self) {
@@ -81,7 +98,7 @@ impl GeneralTD {
         unsafe { self.val.add(2).write_volatile((val >> 4) << 4) }
     }
     pub fn write_buffer_end(&mut self, val: u32) {
-        unsafe { self.val.add(3).write_volatile((val >> 4) << 4) }
+        unsafe { self.val.add(3).write_volatile(val) }
     }
 }
 
@@ -91,6 +108,17 @@ pub enum IsochTDPart {
     Di = (0x7 << 10) | (21 << 4) | 0,
     Fc = (0x7 << 10) | (24 << 4) | 0,
     Cc = (0xF << 10) | (28 << 4) | 0,
+}
+#[repr(C)]
+pub struct RawIsochTD {
+    _dword0: u32,
+    _dword1: u32,
+    _dword2: u32,
+    _dword3: u32,
+    _dword4: u32,
+    _dword5: u32,
+    _dword6: u32,
+    _dword7: u32,
 }
 
 pub struct IsochTD {

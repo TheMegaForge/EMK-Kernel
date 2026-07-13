@@ -11,22 +11,8 @@ use crate::{
 };
 
 pub trait UsbEndpoint {
-    // base should be used for qTDs
-    fn set_address_and_length(&mut self, base: *mut c_void, maximum_qtds: u8);
-
-    fn get_designated_queue_head_address(&self) -> u32;
-
-    fn control_without_data(&mut self, qh_address: *mut c_void, status_page_buffer0_address: u32);
-    // data_in : true => host receives data from device
-    // data_in : false => device receives data from host
-    fn control_with_data(
-        &mut self,
-        qh_address: *const c_void,
-        setup_page_buffer0_address: u32,
-        base_ptr: u32,
-        ptr_length: u16,
-        data_in: bool,
-    ) -> Option<UsbEndpointError>;
+    // base should be used for Tds
+    fn set_address_and_length(&mut self, base: *mut c_void, transfer_descriptors: u8);
 
     fn get_maximum_packet_size(&self) -> u16;
     fn update_max_packet_size(&mut self, max_packet_size: u16);
@@ -34,7 +20,8 @@ pub trait UsbEndpoint {
     fn endpoint_number(&self) -> u8;
     fn get_transfer_type(&self) -> UsbTransferType;
     fn get_direction(&self) -> Direction;
-    fn calculate_interval_micro_frames(&self) -> u16;
+    /** 0xFFFF means that this endpoint doesn´t have a defined interval*/
+    fn get_interval_in_ms(&self) -> u16;
 }
 
 pub trait UsbInterface {
@@ -51,27 +38,25 @@ pub trait UsbConfiguration {
     fn get_interface_count(&self) -> u8;
     fn get_interface(&self, index: u8) -> Option<&dyn UsbInterface>;
     fn get_mut_interface(&mut self, index: u8) -> Option<&mut dyn UsbInterface>;
+    fn get_hid_interface_count(&self) -> u8;
     fn get_hid_interface(&self, index: u8) -> Option<&UsbHID>;
 }
 
 pub trait UsbDeviceExtendedRequest {
-    fn set_protocol(&mut self, request: u8, interface: u16);
+    fn set_protocol(&mut self, request: u8, w_value: u16, interface: u16);
 }
 
 pub trait UsbDevice: UsbDeviceStandardRequest + UsbDeviceExtendedRequest {
-    fn await_interrupt(&self);
-
     fn detach(&mut self);
 
     fn get_port(&self) -> u8;
     /* True means that this device can communicate with the host controller*/
     fn get_state(&self) -> UsbDeviceState;
-    fn endpoint_count(&self) -> u8;
     fn device_address(&self) -> u8;
-    fn request_packet_address<'a>(&'a self) -> &'a mut UsbStandardDeviceRequest;
 
     fn get_configuration_count(&self) -> u8;
     fn get_configuration(&self, config: u8) -> Option<&dyn UsbConfiguration>;
+    fn get_mut_configuration(&mut self, config: u8) -> Option<&mut dyn UsbConfiguration>;
 
     fn get_class_code(&self) -> u8;
     fn get_sub_class_code(&self) -> u8;
@@ -105,13 +90,14 @@ pub trait UsbController {
     fn get_device(&self, index: u16) -> Option<&dyn UsbDevice>;
     fn get_mut_device(&mut self, index: u16) -> Option<&mut dyn UsbDevice>;
     /**
-     *
+     *NOTICE: device and endpoint have to be from the controller
      */
     fn install_interrupt_poller(
         &mut self,
-        device: &dyn UsbDevice,
-        endpoint: &dyn UsbEndpoint,
-        frame: u8,
+        device: &mut dyn UsbDevice,
+        interface_index: u8,
+        endpoint_index: u8,
+        interval_in_ms: u8,
         report_address: u32,
         bytes_to_transfer: u16,
         callback: Option<UsbInterruptPollerCallbackFn>,

@@ -1,4 +1,4 @@
-use core::slice;
+use core::{ffi::c_void, slice};
 
 use crate::{
     drivers::usb::{
@@ -6,7 +6,7 @@ use crate::{
             Ehci, EhciInterruptPoller,
             configuration_parser::EhciDeviceConfiguration,
             data_structures::{
-                AsynchronousList, EhciLinkType, EndpointSpeed, Mult, PidCode,
+                AsynchronousList, EhciLinkType, EndpointSpeed, Mult,
                 QueueElementTransferDescriptor, QueueHead, QueueHeadBitPart,
                 QueueHeadPart::{self, Eps, MaximumPacketLength, Type},
             },
@@ -24,10 +24,9 @@ use crate::{
             structures::{device::EhciDevice, endpoint::EhciEndpoint, interface::EhciInterface},
         },
         independent::{
-            CONFIGURATION_DESCRIPTOR_TYPE, DEVICE_DESCRIPTOR_TYPE, UsbControllerType,
-            UsbDeviceState,
+            PidCode, UsbControllerType, UsbDescriptorType, UsbDeviceState, UsbRequestCode,
         },
-        standard_requests::UsbDeviceStandardRequest,
+        standard_requests::{UsbConfigurationDescriptor, UsbDeviceStandardRequest},
         traits::{
             UsbConfiguration, UsbController, UsbDevice, UsbEndpoint, UsbInterface,
             UsbInterruptPollerCallbackFn,
@@ -110,7 +109,7 @@ impl UsbController for Ehci {
             let eecp = self.usbbase.hccparams().get(Eecp);
             let val = pci_bus.read_configuration_space_u32(pci_device, eecp as u16);
             pci_bus.write_configuration_space_u32(pci_device, eecp as u16, val | 1 << 24);
-            sleep(200);
+            sleep(40);
             pci_bus.write_configuration_space_u32(pci_device, eecp as u16 + 4, 0);
         }
         self.fladj = Fladj::new(unsafe { pci_bus.pci_base(pci_device).unwrap().add(0x61) } as u64);
@@ -129,7 +128,7 @@ impl UsbController for Ehci {
         }
         self.information.potential_device_count = ports as u16;
         self.initialize();
-        sleep(100);
+        sleep(40);
         return true;
     }
 
@@ -139,7 +138,8 @@ impl UsbController for Ehci {
                 continue;
             }
 
-            let raw_descriptor = device.get_descriptor(DEVICE_DESCRIPTOR_TYPE, 0, Option::None, 18);
+            let raw_descriptor =
+                device.get_descriptor(UsbDescriptorType::Device, 0, Option::None, 18);
             let device_descriptor = raw_descriptor.as_device_descriptor();
 
             device
@@ -167,15 +167,8 @@ impl UsbController for Ehci {
                 device.device_information.device_class,
                 device.device_information.device_sub_class
             );
-            match self
-                .memory_space
-                .free(&MemoryBlock::new(0x1000, raw_descriptor.data as u64))
-            {
-                Ok(_) => {}
-                Err(_e) => simple_kernel_panic(
-                    "Ehci/gather_device_information",
-                    "Could not free device descriptor\n",
-                ),
+            if let Result::Err(_) = self.memory_space.free(&raw_descriptor.data) {
+                simple_kernel_panic(self.module.name(), "Could not free device descriptor\n")
             }
         }
         return true;
@@ -194,13 +187,13 @@ impl UsbController for Ehci {
             }
             // fetches 9 bytes for wTotalLength first.
             let raw_descriptor0 =
-                device.get_descriptor(CONFIGURATION_DESCRIPTOR_TYPE, 0, Option::None, 9);
+                device.get_descriptor(UsbDescriptorType::Configuration, 0, Option::None, 9);
             let configuration_descriptor0 = raw_descriptor0.as_configuration_descriptor();
             device.set_configuration(configuration_descriptor0.b_configuration_value);
-            device.device_information.max_power_ma = configuration_descriptor0.b_max_power;
+            device.device_information.max_power_ma = configuration_descriptor0.b_max_power as u16;
             device.device_information.num_interfaces = configuration_descriptor0.b_num_interfaces;
             let raw_descriptor1 = device.get_descriptor(
-                CONFIGURATION_DESCRIPTOR_TYPE,
+                UsbDescriptorType::Configuration,
                 0,
                 Option::None,
                 configuration_descriptor0.w_total_length,
@@ -216,31 +209,22 @@ impl UsbController for Ehci {
                 &mut self.memory_space,
                 &mut interface_array,
                 &mut endpoint_array,
-                unsafe { raw_descriptor1.data.add(9) },
+                unsafe { raw_descriptor1.data.as_ptr::<c_void>().add(9) },
                 configuration_descriptor0.b_num_interfaces as u16,
             ));
 
-            match self
-                .memory_space
-                .free(&MemoryBlock::new(0x1000, raw_descriptor0.data as u64))
-            {
-                Ok(_) => {}
-                Err(_e) => simple_kernel_panic(
-                    "Ehci/configure_devices",
-                    "Could not free configuration descriptor 0\n",
-                ),
+            if let Result::Err(_) = self.memory_space.free(&raw_descriptor0.data) {
+                simple_kernel_panic(
+                    self.module.name(),
+                    "Could not free configuration descriptor\n",
+                )
             }
-
-            match self
-                .memory_space
-                .free(&MemoryBlock::new(0x1000, raw_descriptor1.data as u64))
-            {
-                Ok(_) => {}
-                Err(_e) => simple_kernel_panic(
-                    "Ehci/configure_devices",
-                    "Could not free configuration descriptor 1\n",
-                ),
-            };
+            if let Result::Err(_) = self.memory_space.free(&raw_descriptor1.data) {
+                simple_kernel_panic(
+                    self.module.name(),
+                    "Could not free configuration descriptor\n",
+                )
+            }
         }
         return true;
     }
@@ -461,7 +445,17 @@ impl UsbController for Ehci {
                 break;
             }
         }
-        assert_ne!(first_addr, 0);
+
+        if first_addr == 0 {
+            if let Result::Err(_) = self.memory_space.free(&MemoryBlock::new(
+                0x1000,
+                new_async_list.address_of_index(0) as u64,
+            )) {
+                simple_kernel_panic(self.module.name(), "Could not free new async list\n")
+            }
+            self.dummy = true;
+            return Option::Some(true);
+        }
         QueueHead::new(last_address_written).set_horizontal_link_pointer(first_addr);
         match self.memory_space.free(&MemoryBlock::new(
             0x1000,
@@ -496,8 +490,9 @@ impl UsbController for Ehci {
 
     fn install_interrupt_poller(
         &mut self,
-        device: &dyn UsbDevice,
-        endpoint: &dyn UsbEndpoint,
+        device: &mut dyn UsbDevice,
+        interface_index: u8,
+        endpoint_index: u8,
         frame: u8,
         report_address: u32,
         bytes_to_transfer: u16,
@@ -529,6 +524,14 @@ impl UsbController for Ehci {
                 qtds[i].set_current_offset((report_address & 0xFFF) as u16);
                 qtds[i].set_buffer_pointer0((report_address >> 12) << 12);
             }
+
+            let endpoint = device
+                .get_configuration(0)
+                .unwrap()
+                .get_interface(interface_index)
+                .unwrap()
+                .get_endpoint(endpoint_index as u16)
+                .unwrap();
 
             let mut qh = QueueHead::new(qh_address as u64);
             qh.high_speed_initialize(

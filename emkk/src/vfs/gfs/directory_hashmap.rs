@@ -2,7 +2,7 @@ use core::{ptr::null_mut, slice};
 
 use crate::{
     hal::memory::allocator::Allocator,
-    utils::{allocators::NodeAllocator, invalid_mut_slice},
+    utils::{allocators::NodeAllocator, slices::invalid_mut_slice},
     vfs::gfs::{link::GfsLink, string_allocator::GfsStringAllocator},
 };
 #[derive(Clone, Copy)]

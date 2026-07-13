@@ -1,12 +1,12 @@
-use core::{ffi::CStr, slice};
+use core::{arch::asm, ffi::CStr, ptr, slice};
 
 pub mod allocators;
 pub mod buffer;
-pub mod intrin;
 pub mod list;
 pub mod memory;
 pub mod queue;
 pub mod reader;
+pub mod slices;
 pub mod stack;
 pub mod string;
 pub mod traits;
@@ -153,27 +153,64 @@ pub enum Errno {
     EHWPOISON = 0x85,       // Memory page has hardware error
 }
 #[inline(always)]
-pub fn resize_slice<T>(slice: &mut &mut [T], new_size: usize) {
-    *slice = unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr(), new_size) }
+pub unsafe fn wrmsr(msr: u64, value: u64) {
+    let low: u32 = (value & 0xFFFFFFFF) as u32;
+    let high: u32 = (value >> 32) as u32;
+
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") low,
+            in("edx") high,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+#[inline(always)]
+pub fn rdmsr(msr: u64) -> u64 {
+    let low: u32;
+    let high: u32;
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") msr,
+            out("eax") low,
+            out("edx") high,
+        );
+    }
+    return (high as u64) << 32 | low as u64;
 }
 
 #[inline(always)]
-pub fn rebase_slice<T>(slice: &mut &mut [T], new_base: u64) {
-    *slice = unsafe { slice::from_raw_parts_mut(new_base as *mut T, slice.len()) };
+pub unsafe fn io_wait() {
+    unsafe { outb(0x80, 0) };
 }
-
-#[inline(always)]
-pub const fn invalid_mut_slice<'a, T>() -> &'a mut [T] {
-    return unsafe { slice::from_raw_parts_mut(align_of::<T>() as *mut T, 0) };
+#[macro_export]
+macro_rules! downcast_mut {
+    ($input:expr, $trait_implemented:ident, $target_type:ty) => {{
+        let cast = ($input) as *mut dyn $trait_implemented as *mut () as *mut $target_type;
+        unsafe { &mut *cast }
+    }};
 }
-
-#[inline(always)]
-pub const fn invalid_slice<'a, T>() -> &'a [T] {
-    return unsafe { slice::from_raw_parts(align_of::<T>() as *const T, 0) };
+#[macro_export]
+macro_rules! downcast {
+    ($input:expr, $trait_implemented:ident, $target_type:ty) => {{
+        let cast = $input as *const dyn $trait_implemented as *const () as *const $target_type;
+        unsafe { &*cast }
+    }};
 }
 
 unsafe extern "C" {
     pub fn popcount(val: u32) -> u32;
+    pub fn get_cr3() -> *mut u64;
+    pub fn set_cr3(ptr: *mut u64);
+    pub fn inb(port: u16) -> u8;
+    pub fn inw(port: u16) -> u16;
+    pub fn ind(port: u16) -> u32;
+    pub fn outb(port: u16, val: u8);
+    pub fn outw(port: u16, val: u16);
+    pub fn outd(port: u16, val: u32);
 }
 
 pub struct CpuidResult {
@@ -237,4 +274,15 @@ pub fn c_style_length_check_u64(memory: *const u64) -> u32 {
         length += 1;
     }
     return length as u32;
+}
+
+pub fn u8_rounded_to_highest_power_of_2(r#in: u8) -> u8 {
+    let mut highest = 0u8;
+    for i in (0usize..=7usize).rev() {
+        if r#in & (1 << i) != 0 {
+            highest = 1 << i;
+            break;
+        }
+    }
+    return highest;
 }

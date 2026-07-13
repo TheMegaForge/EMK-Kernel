@@ -54,7 +54,7 @@ use crate::{
     multithreading::{Multithreading, local_apic_spurious_interrupt, processors::Processor},
     processes::loader::{LoaderResources, NT64LoaderResources},
     success,
-    utils::{Errno, invalid_slice, memory::MemoryResult, reader::BufferedReader},
+    utils::{Errno, memory::MemoryResult, reader::BufferedReader, slices::invalid_slice},
     vfs::gfs::{GFS, GeneralFileSystem},
 };
 pub struct PciRoutingInterrupt {
@@ -190,6 +190,7 @@ impl PciRoutingTable {
                                             }
                                         }
                                         cptr = unsafe { cptr.add(length as usize + 1) };
+                                        rem -= length as u32 + 1;
                                     } else {
                                         assert_eq!(source_index, 0);
                                         if r#type & (0x80 - 1) == 0x9 {
@@ -208,7 +209,7 @@ impl PciRoutingTable {
                                         }
                                         let length =
                                             unsafe { (cptr.add(1) as *const u16).read_unaligned() };
-
+                                        rem -= length as u32;
                                         cptr = unsafe { cptr.add(length as usize) };
                                     }
                                 }
@@ -497,7 +498,7 @@ impl SystemTable {
     }
 
     pub fn initialize_keyboard(&mut self) {
-        let allocator = &mut self.virtual_allocator.allocator;
+        let allocator = &mut self.physical_allocator;
         if let Option::Some((controller, device, hid)) =
             self.usb.find_hid_device(UsbHidDeviceType::Keyboard)
         {
@@ -549,19 +550,21 @@ impl SystemTable {
                     (*(FIXED_PROCESSOR_VIRTUAL_ADDRESS as *mut Processor)).request_isr_vector()
                 };
 
-                let gsi = match self.pci_routing_table.find_pci_int(
-                    &mut self.aml_code,
-                    device,
-                    func,
-                    self.pci_bus.get_pin(pci_device),
-                ) {
-                    Some(gsi) => gsi,
-                    None => {
-                        simple_kernel_panic(module.name(), "Could not get gsi for NVMe\n");
-                    }
-                };
+                let mut pin = self.pci_bus.get_pin(pci_device);
+                assert_ne!(pin, 0);
+                pin -= 1;
 
-                /* 22 = FIXED! + FIXME!*/
+                let gsi =
+                    match self
+                        .pci_routing_table
+                        .find_pci_int(&mut self.aml_code, device, func, pin)
+                    {
+                        Some(gsi) => gsi,
+                        None => {
+                            simple_kernel_panic(module.name(), "Could not get gsi for NVMe\n");
+                        }
+                    };
+                info!(&mut module, "NVMe uses apic-irq {}\n", gsi.irq);
                 self.apic.write_gsi(
                     gsi.irq as u32,
                     isr_vector,

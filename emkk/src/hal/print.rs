@@ -34,7 +34,7 @@ impl GopFramebuffer {
 }
 
 pub fn switch_framebuffer_location(pager: &mut Pager, physical_allocator: &mut Allocator) {
-    let mut fb = unsafe { &mut (*SCREEN_INFO.framebuffer) };
+    let fb = unsafe { &mut (*SCREEN_INFO.framebuffer) };
     let mut pages = fb.framebuffer_size / 0x1000;
     if fb.framebuffer_size % 0x1000 != 0 {
         pages += 1;
@@ -371,7 +371,7 @@ impl<'a> Default for Module<'a> {
 }
 
 impl<'a> Module<'a> {
-    pub fn new(name: &'a str) -> Module<'a> {
+    pub const fn new(name: &'a str) -> Module<'a> {
         return Module {
             name,
             deconstructed: false,

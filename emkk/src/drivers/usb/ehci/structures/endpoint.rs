@@ -4,9 +4,12 @@ use crate::{
     drivers::usb::{
         ehci::{
             EHCI_CONTROLLER,
-            data_structures::{PidCode, QueueElementTransferDescriptor, QueueHead},
+            data_structures::{QueueElementTransferDescriptor, QueueHead},
         },
-        independent::{Direction, UsbEndpointError, UsbTransferType},
+        independent::{
+            Direction, PidCode, USB_MICRO_FRAME_TO_FRAME_CONVERSION_FACTOR, UsbEndpointError,
+            UsbTransferType,
+        },
         ohci::structures::endpoint::EndpointDescriptorBitPart::S,
         standard_requests::UsbEndpointDescriptor,
         traits::UsbEndpoint,
@@ -140,10 +143,6 @@ impl EhciEndpoint {
 }
 
 impl UsbEndpoint for EhciEndpoint {
-    fn get_designated_queue_head_address(&self) -> u32 {
-        return self.designated_queue_head.get_address() as u32;
-    }
-
     fn get_maximum_packet_size(&self) -> u16 {
         return self.endpoint_information.max_packet_size;
     }
@@ -170,14 +169,22 @@ impl UsbEndpoint for EhciEndpoint {
         return Direction::from_bool(1 == ((self.endpoint_information.endpoint_address >> 7) & 1));
     }
 
-    fn calculate_interval_micro_frames(&self) -> u16 {
-        return 1 << (self.endpoint_information.interval - 1);
+    fn get_interval_in_ms(&self) -> u16 {
+        return (1 << (self.endpoint_information.interval - 1))
+            / USB_MICRO_FRAME_TO_FRAME_CONVERSION_FACTOR;
     }
 
     fn endpoint_number(&self) -> u8 {
         return self.endpoint_index;
     }
-    fn control_without_data(
+}
+
+impl EhciEndpoint {
+    pub fn get_designated_queue_head_address(&self) -> u32 {
+        return self.designated_queue_head.get_address() as u32;
+    }
+
+    pub fn control_without_data(
         &mut self,
         qh_address: *mut core::ffi::c_void,
         status_page_buffer0_address: u32,
@@ -228,7 +235,7 @@ impl UsbEndpoint for EhciEndpoint {
 
         self.advance_setup_qtd(1);
     }
-    fn control_with_data(
+    pub fn control_with_data(
         &mut self,
         qh_address: *const c_void,
         setup_page_buffer0_address: u32,

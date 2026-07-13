@@ -4,6 +4,7 @@ use core::{arch::asm, ffi::c_void};
 use crate::fixed_vaddrs::{
     APPLICATION_CORE_TSS_FIXED_VADDR, APPLICATION_CORE_TSS_RSP0_FIXED_VADDR_BASE,
 };
+use crate::utils::wrmsr;
 use crate::{
     error,
     hal::{
@@ -12,7 +13,7 @@ use crate::{
     },
     multithreading::processors::HOST_CORE_ACTIVATION_ID,
     success,
-    utils::{intrin::wrmsr, memory::memcpy, traits::Region},
+    utils::{memory::memcpy, traits::Region},
 };
 
 #[repr(packed)]

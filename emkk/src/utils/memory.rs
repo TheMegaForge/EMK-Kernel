@@ -1,5 +1,10 @@
 use core::ffi::c_void;
 
+use crate::hal::{
+    memory::allocator::{Allocator, MemoryBlock},
+    print::{Module, simple_kernel_panic},
+};
+
 unsafe extern "C" {
     pub fn memset(ptr: *mut c_void, value: u8, length: u32);
     pub fn memset_word(ptr: *mut c_void, value: u16, length: u32);
@@ -27,6 +32,29 @@ pub unsafe fn memcmp_byte(ptr0: *const u8, ptr1: *const u8, length: u32) -> bool
         }
     }
     true
+}
+#[inline(always)]
+pub fn free_or_crash(
+    allocator: &mut Allocator,
+    mb: &MemoryBlock,
+    module: &mut Module<'static>,
+    message: &'static str,
+) {
+    if let Result::Err(_) = allocator.free(mb) {
+        simple_kernel_panic(module.name(), message);
+    }
+}
+#[inline(always)]
+pub fn alloc_zero_or_crash(
+    allocator: &mut Allocator,
+    pages: u16,
+    module: &mut Module<'static>,
+    message: &'static str,
+) -> MemoryBlock {
+    match allocator.alloc_zero(pages) {
+        Ok(mb) => return mb,
+        Err(_) => simple_kernel_panic(module.name(), message),
+    }
 }
 
 #[derive(Debug)]

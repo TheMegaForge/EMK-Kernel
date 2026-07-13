@@ -7,12 +7,7 @@ use crate::{
     info,
     multithreading::processors::HOST_CORE_ACTIVATION_ID,
     success,
-    utils::{
-        intrin::{io_wait, outb},
-        invalid_mut_slice,
-        memory::memcpy,
-        traits::Region,
-    },
+    utils::{io_wait, memory::memcpy, outb, slices::invalid_mut_slice, traits::Region},
 };
 use core::{arch::asm, ffi::c_void, ptr::null_mut, slice};
 #[repr(packed, C)]

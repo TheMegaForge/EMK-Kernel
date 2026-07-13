@@ -31,7 +31,8 @@ use crate::{
     processes::IpiDescriptorPacket,
     time::sleep,
     utils::{
-        allocators::DynamicAllocator, invalid_mut_slice, list::List, memory::memcpy, traits::Region,
+        allocators::DynamicAllocator, list::List, memory::memcpy, slices::invalid_mut_slice,
+        traits::Region,
     },
 };
 

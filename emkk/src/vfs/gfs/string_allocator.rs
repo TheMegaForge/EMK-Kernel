@@ -7,7 +7,11 @@ use crate::{
         pager::{PAGER_PRESENT, PAGER_RW},
     },
     multithreading::processors::Processor,
-    utils::{allocators::NodeAllocator, rebase_slice, resize_slice, traits::Region},
+    utils::{
+        allocators::NodeAllocator,
+        slices::{rebase_slice, resize_slice},
+        traits::Region,
+    },
     vfs::gfs::GFS_STRING_ALLOCATED_SIZE,
 };
 

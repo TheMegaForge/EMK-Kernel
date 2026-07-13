@@ -197,6 +197,10 @@ impl OhciInterruptStatus {
         return Self { val };
     }
 
+    pub fn as_u32(&self) -> u32 {
+        return unsafe { self.val.read_volatile() };
+    }
+
     pub fn is_set(&self, what_to_check: OhciInterrupt) -> bool {
         let val = unsafe { self.val.read_volatile() };
         return 0 != (val & (1 << what_to_check as u32));
@@ -598,6 +602,10 @@ impl OhciBar {
     }
     pub fn write_hc_done_head(&mut self, val: u32) {
         unsafe { self.bar.add(12).write_volatile(val) }
+    }
+
+    pub fn hc_done_head(&mut self) -> u32 {
+        unsafe { self.bar.add(12).read_volatile() }
     }
     pub fn hc_fm_interval(&self) -> OhciFmInterval {
         OhciFmInterval::new(unsafe { self.bar.add(13) })

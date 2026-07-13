@@ -1,5 +1,9 @@
-Implement Ohci
-Implement Uhci
+Implement Hub for Uhci
+Implement Hub for Ohci
+Implement Hub for Ehci
+Implement Hub for Xhci
+Finish like everything else in regards to Usb
+Reorder USB
 Implement Sata
 Implement Ext3
 Implement Ext4
